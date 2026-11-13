@@ -1,0 +1,20 @@
+[Unit]
+Description=E-paper slide carousel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+SupplementaryGroups=gpio
+WorkingDirectory=/opt/epaper-display
+StateDirectory=epaper-display
+Environment=EPAPER_CONFIG=/etc/epaper-display/config.json
+Environment=EPAPER_DATA_DIR=/var/lib/epaper-display
+EnvironmentFile=-/etc/epaper-display/environment
+ExecStart=/opt/epaper-display/.venv/bin/epaper-display run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

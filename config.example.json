@@ -1,0 +1,6 @@
+{
+  "interval_seconds": 1800,
+  "refresh_poll_seconds": 30,
+  "display_orientation": "portrait",
+  "portrait_rotation_degrees": 90
+}

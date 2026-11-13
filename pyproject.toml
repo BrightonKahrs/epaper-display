@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "epaper-display"
+version = "0.1.0"
+description = "A persistent slide carousel for a Raspberry Pi e-paper display."
+requires-python = ">=3.11"
+dependencies = ["Pillow>=10.0"]
+
+[project.optional-dependencies]
+hardware = ["inky>=2.0.0"]
+
+[project.scripts]
+epaper-display = "epaper_display.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
