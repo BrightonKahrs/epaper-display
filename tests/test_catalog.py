@@ -70,6 +70,48 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.catalog.add_image(invalid)
 
+    def test_replace_preserves_identity_and_replaces_gallery_file(self) -> None:
+        original = self.catalog.add_image(self.image_path, "Original", now=100)
+        replacement = self.root / "replacement.bmp"
+        Image.new("RGB", (40, 30), "blue").save(replacement)
+
+        updated = self.catalog.replace_image(original.id, replacement)
+
+        self.assertEqual((updated.id, updated.title, updated.created_at),
+                         (original.id, "Original", 100))
+        self.assertEqual(len(self.catalog.list_slides(now=101)), 1)
+        self.assertFalse(original.path.exists())
+        with Image.open(updated.path) as image:
+            self.assertEqual(image.getpixel((0, 0)), (0, 0, 255))
+
+    def test_invalid_replacements_and_api_operations_leave_existing_slide_untouched(self) -> None:
+        local = self.catalog.add_image(self.image_path, now=100)
+        api = self.catalog.add_image(
+            self.image_path, source="api:weather", external_id="today", now=100
+        )
+        invalid = self.root / "invalid.png"
+        invalid.write_text("invalid", encoding="utf-8")
+        for slide_id, path in ((local.id, invalid), (api.id, self.image_path),
+                               ("../bad-id", self.image_path),
+                               ("00000000-0000-0000-0000-000000000000", self.image_path)):
+            with self.subTest(slide_id=slide_id), self.assertRaises(ValueError):
+                self.catalog.replace_image(slide_id, path)
+        with self.assertRaises(ValueError):
+            self.catalog.delete_slide(api.id)
+        with self.assertRaises(ValueError):
+            self.catalog.delete_slide("missing")
+        self.assertTrue(local.path.exists())
+        self.assertTrue(api.path.exists())
+        self.assertEqual(len(self.catalog.list_slides(now=101)), 2)
+
+    def test_delete_removes_only_selected_gallery_entry(self) -> None:
+        first = self.catalog.add_image(self.image_path, now=100)
+        second = self.catalog.add_image(self.image_path, now=101)
+        self.catalog.delete_slide(first.id)
+        self.assertFalse(first.path.exists())
+        self.assertTrue(second.path.exists())
+        self.assertEqual([slide.id for slide in self.catalog.list_slides(now=102)], [second.id])
+
 
 if __name__ == "__main__":
     unittest.main()

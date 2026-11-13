@@ -36,6 +36,11 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("images", nargs="+", type=Path)
 
     commands.add_parser("list", help="List non-expired slides.")
+    replace = commands.add_parser("replace", help="Replace the image for a local slide.")
+    replace.add_argument("slide_id")
+    replace.add_argument("image", type=Path)
+    delete = commands.add_parser("delete", help="Delete a local slide and its gallery image.")
+    delete.add_argument("slide_id")
     commands.add_parser("pick", help="Choose a slide from an interactive arrow-key menu.")
     select = commands.add_parser("show", help="Select a slide by ID.")
     select.add_argument("slide_id")
@@ -136,6 +141,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "list":
             for slide in catalog.list_slides(now):
                 print(f"{slide.id}\t{slide.title}\t{slide.source}")
+            return 0
+        if args.command == "replace":
+            slide = catalog.replace_image(args.slide_id, args.image)
+            print(f"Replaced {slide.id}: {slide.title}")
+            return 0
+        if args.command == "delete":
+            catalog.delete_slide(args.slide_id)
+            print(f"Deleted {args.slide_id}.")
             return 0
         if args.command == "pick":
             slides = catalog.list_slides(now)

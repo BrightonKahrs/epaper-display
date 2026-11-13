@@ -109,6 +109,8 @@ class Catalog:
         external_id: str | None,
         expires_at: float | None,
         created_at: float,
+        *,
+        replace_local: bool = False,
     ) -> Slide:
         try:
             with Image.open(source_path) as image:
@@ -129,12 +131,19 @@ class Catalog:
         temporary_path = Path(temporary_name)
         backup_path: Path | None = None
         old_filename: str | None = None
+        replaced = False
         try:
             shutil.copyfile(source_path, temporary_path)
             with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
                 old = connection.execute(
-                    "SELECT filename FROM slides WHERE id = ?", (slide_id,)
+                    "SELECT * FROM slides WHERE id = ?", (slide_id,)
                 ).fetchone()
+                if replace_local:
+                    self._require_local_slide(old, slide_id)
+                    title = old["title"]
+                    created_at = old["created_at"]
+                    expires_at = old["expires_at"]
                 old_filename = old["filename"] if old else None
                 if destination.exists():
                     descriptor, backup_name = tempfile.mkstemp(
@@ -149,6 +158,7 @@ class Catalog:
                         candidate_backup.unlink(missing_ok=True)
                         raise
                 os.replace(temporary_path, destination)
+                replaced = True
                 connection.execute(
                     """
                     INSERT INTO slides
@@ -172,18 +182,89 @@ class Catalog:
                         expires_at,
                     ),
                 )
+                if replace_local:
+                    connection.execute(
+                        """
+                        INSERT INTO state(key, value) VALUES (?, '1')
+                        ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1
+                        """,
+                        (f"slide_revision:{slide_id}",),
+                    )
         except Exception:
             temporary_path.unlink(missing_ok=True)
-            if backup_path is not None:
+            if replaced and backup_path is not None:
                 os.replace(backup_path, destination)
-            elif destination.exists() and old_filename is None:
+            elif replaced:
                 destination.unlink()
+            elif backup_path is not None:
+                backup_path.unlink(missing_ok=True)
             raise
         if backup_path is not None:
             backup_path.unlink(missing_ok=True)
         if old_filename and old_filename != filename:
-            (self.gallery_dir / old_filename).unlink(missing_ok=True)
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                current = connection.execute(
+                    "SELECT filename FROM slides WHERE id = ?", (slide_id,)
+                ).fetchone()
+                if current is None or current["filename"] != old_filename:
+                    (self.gallery_dir / old_filename).unlink(missing_ok=True)
         return Slide(slide_id, title, destination, source, created_at, expires_at)
+
+    @staticmethod
+    def _require_local_slide(row: sqlite3.Row | None, slide_id: str) -> None:
+        if row is None:
+            raise ValueError(f"Slide not found: {slide_id}")
+        if row["source"] != "ssh":
+            raise ValueError(f"Only local slides can be replaced or deleted: {slide_id}")
+
+    def replace_image(self, slide_id: str, source_path: Path) -> Slide:
+        try:
+            valid_id = str(uuid.UUID(slide_id)) == slide_id
+        except ValueError:
+            valid_id = False
+        if not valid_id:
+            raise ValueError(f"Invalid slide ID: {slide_id}")
+        source_path = source_path.expanduser().resolve()
+        if not source_path.is_file():
+            raise FileNotFoundError(source_path)
+        return self._store_image(
+            source_path, slide_id, "", "ssh", None, None,
+            datetime.now().timestamp(), replace_local=True,
+        )
+
+    def delete_slide(self, slide_id: str) -> None:
+        backup_path: Path | None = None
+        image_path: Path | None = None
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT * FROM slides WHERE id = ?", (slide_id,)
+                ).fetchone()
+                self._require_local_slide(row, slide_id)
+                image_path = self.gallery_dir / row["filename"]
+                descriptor, name = tempfile.mkstemp(
+                    prefix=f".{slide_id}-deleted-", dir=self.gallery_dir
+                )
+                os.close(descriptor)
+                backup_path = Path(name)
+                try:
+                    os.replace(image_path, backup_path)
+                except OSError:
+                    backup_path.unlink(missing_ok=True)
+                    backup_path = None
+                    raise
+                connection.execute("DELETE FROM slides WHERE id = ?", (slide_id,))
+                connection.execute(
+                    "DELETE FROM state WHERE key = ?", (f"slide_revision:{slide_id}",)
+                )
+        except Exception:
+            if backup_path is not None and image_path is not None:
+                os.replace(backup_path, image_path)
+            raise
+        if backup_path is not None:
+            backup_path.unlink()
 
     def add_image(
         self,

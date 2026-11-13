@@ -30,7 +30,9 @@ class CarouselService:
         self.poll_seconds = poll_seconds
         self._stop = threading.Event()
         self._last_rendered_id: str | None = None
+        self._last_rendered_revision: str | None = None
         self._failed_slide_id: str | None = None
+        self._failed_slide_revision: str | None = None
         self._retry_after = 0.0
 
     def stop(self) -> None:
@@ -50,9 +52,18 @@ class CarouselService:
             slide = self.catalog.initialize_carousel(
                 timestamp, self.config.interval_seconds
             )
-        if slide is None or slide.id == self._last_rendered_id:
+        if slide is None:
+            self._last_rendered_id = None
+            self._last_rendered_revision = None
             return
-        if slide.id == self._failed_slide_id and timestamp < self._retry_after:
+        revision = self.catalog.get_state(f"slide_revision:{slide.id}")
+        if slide.id == self._last_rendered_id and revision == self._last_rendered_revision:
+            return
+        if (
+            slide.id == self._failed_slide_id
+            and revision == self._failed_slide_revision
+            and timestamp < self._retry_after
+        ):
             return
         try:
             show_slide(
@@ -63,11 +74,14 @@ class CarouselService:
             )
         except Exception:
             self._failed_slide_id = slide.id
+            self._failed_slide_revision = revision
             self._retry_after = timestamp + 30
             logger.exception("Could not display slide %s", slide.id)
             return
         self._last_rendered_id = slide.id
+        self._last_rendered_revision = revision
         self._failed_slide_id = None
+        self._failed_slide_revision = None
         self._retry_after = 0.0
         logger.info("Displaying slide %s: %s", slide.id, slide.title)
 

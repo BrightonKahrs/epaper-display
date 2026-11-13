@@ -89,6 +89,20 @@ ssh pi@raspberrypi 'epaper-display previous'
 ssh pi@raspberrypi 'epaper-display show <slide-id>'
 ```
 
+Use `list` to find slide IDs, then replace or permanently delete a local slide:
+
+```sh
+epaper-display replace <slide-id> /tmp/updated-slide.png
+epaper-display delete <slide-id>
+```
+
+Replacement keeps the slide's ID, title, and position. A running carousel
+refreshes the current slide after replacement and selects another available
+slide after deletion. If the gallery is empty, the last image remains on the
+physical display until another slide is shown. These commands apply only to
+local slides; API-sourced slides are managed by their source. Use the same
+user and data directory as the running carousel.
+
 To push an image from your computer, copy it to the Pi and add it to the
 gallery:
 

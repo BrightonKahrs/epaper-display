@@ -146,6 +146,20 @@ class PickerTests(unittest.TestCase):
             result = main(["--config", str(self.config), "pick"])
         return result, stdout.getvalue(), stderr.getvalue()
 
+    def test_replace_and_delete_local_slide_commands(self) -> None:
+        slide = self.catalog.add_image(self.image, "Original")
+        replacement = self.root / "replacement.png"
+        Image.new("RGB", (20, 20), "blue").save(replacement)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(
+                main(["--config", str(self.config), "replace", slide.id, str(replacement)]), 0
+            )
+            self.assertEqual(main(["--config", str(self.config), "delete", slide.id]), 0)
+        self.assertIn(f"Replaced {slide.id}: Original", output.getvalue())
+        self.assertIn(f"Deleted {slide.id}", output.getvalue())
+        self.assertEqual(self.catalog.list_slides(), [])
+
     def test_arrow_keys_select_and_persist_slide_from_real_menu(self) -> None:
         first = self.catalog.add_image(self.image, "Same title", now=10)
         second = self.catalog.add_image(self.image, "Same title", now=20)

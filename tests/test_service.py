@@ -12,6 +12,34 @@ from epaper_display.source_registry import ApiSourceRegistry
 
 
 class ServiceTests(unittest.TestCase):
+    def test_replacing_and_deleting_current_slide_updates_running_service(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            catalog = Catalog(root / "catalog.sqlite3", root / "gallery")
+            sources = ApiSourceRegistry(root / "api-specs.sqlite3")
+            preview = root / "preview.png"
+            red, blue, green = (root / f"{color}.png" for color in ("red", "blue", "green"))
+            for path, color in ((red, "red"), (blue, "blue"), (green, "green")):
+                Image.new("RGB", (20, 20), color).save(path)
+            first = catalog.add_image(red, now=100)
+            second = catalog.add_image(green, now=101)
+            service = CarouselService(
+                AppConfig(root, interval_seconds=1800), catalog, sources, PreviewDisplay(preview)
+            )
+            service.tick(now=102)
+            catalog.replace_image(first.id, blue)
+            service.tick(now=103)
+            with Image.open(preview) as image:
+                self.assertEqual(image.getpixel((800, 600)), (0, 0, 255))
+            catalog.delete_slide(first.id)
+            service.tick(now=104)
+            self.assertEqual(catalog.get_state("current_slide_id"), second.id)
+            with Image.open(preview) as image:
+                self.assertEqual(image.getpixel((800, 600)), (0, 128, 0))
+            catalog.delete_slide(second.id)
+            service.tick(now=105)
+            self.assertFalse(catalog.get_state("current_slide_id"))
+
     def test_service_starts_when_first_slide_arrives_after_boot(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
