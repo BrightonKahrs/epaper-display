@@ -160,6 +160,58 @@ class PickerTests(unittest.TestCase):
         self.assertIn(f"Deleted {slide.id}", output.getvalue())
         self.assertEqual(self.catalog.list_slides(), [])
 
+    def test_enable_disable_by_id_and_list_all(self) -> None:
+        slide = self.catalog.add_image(self.image, "Local")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["--config", str(self.config), "disable", slide.id]), 0)
+            self.assertEqual(main(["--config", str(self.config), "list"]), 0)
+            self.assertEqual(main(["--config", str(self.config), "list", "--all"]), 0)
+        self.assertIn(f"{slide.id}\tLocal\tssh\tdisabled", output.getvalue())
+        self.assertEqual(self.catalog.list_slides(), [])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["--config", str(self.config), "enable", slide.id]), 0)
+        self.assertEqual([item.id for item in self.catalog.list_slides()], [slide.id])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(main(["--config", str(self.config), "disable", "missing"]), 2)
+        self.assertIn("Slide not found", stderr.getvalue())
+
+    def test_enable_disable_picker_filters_and_supports_cancellation(self) -> None:
+        first = self.catalog.add_image(self.image, "First", now=10)
+        second = self.catalog.add_image(
+            self.image, "API", source="api:weather", external_id="today", now=11
+        )
+        self.catalog.set_enabled(second.id, False)
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
+            patch("epaper_display.cli.questionary.select") as menu,
+        ):
+            menu.return_value.ask.return_value = None
+            self.assertEqual(main(["--config", str(self.config), "enable", "pick"]), 0)
+            self.assertEqual([c.value for c in menu.call_args.kwargs["choices"]], [second.id])
+            self.assertFalse(self.catalog.list_slides(include_all=True)[1].enabled)
+            menu.return_value.ask.return_value = second.id
+            self.assertEqual(main(["--config", str(self.config), "enable", "pick"]), 0)
+            menu.return_value.ask.return_value = first.id
+            self.assertEqual(main(["--config", str(self.config), "disable", "pick"]), 0)
+            self.assertEqual(
+                [c.value for c in menu.call_args.kwargs["choices"]], [first.id, second.id]
+            )
+        self.assertEqual([item.id for item in self.catalog.list_slides()], [second.id])
+
+    def test_enable_expired_slide_warns_and_list_all_marks_expired(self) -> None:
+        slide = self.catalog.add_image(self.image, "Expired", now=10, expires_at=50)
+        self.catalog.set_enabled(slide.id, False)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["--config", str(self.config), "enable", slide.id]), 0)
+            self.assertEqual(main(["--config", str(self.config), "list", "--all"]), 0)
+        self.assertIn("expired", output.getvalue())
+        self.assertEqual(self.catalog.list_slides(), [])
+
     def test_replace_pick_uses_arrow_keys_and_excludes_api_slides(self) -> None:
         first = self.catalog.add_image(self.image, "First", now=10)
         self.catalog.add_image(

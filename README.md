@@ -106,6 +106,22 @@ epaper-display delete pick
 The delete menu asks for confirmation; cancelling leaves the slide unchanged.
 These interactive commands require a terminal (use `ssh -t` for direct SSH).
 
+Temporarily exclude individual slides from the carousel without deleting them:
+
+```sh
+epaper-display disable pick
+epaper-display enable pick
+epaper-display list --all
+```
+
+You can use a slide ID instead of `pick`. The enable menu shows disabled slides;
+`list --all` shows enabled, disabled, and expired entries. A disabled slide keeps
+its image and remains disabled during API refresh or local image replacement.
+Expired slides cannot appear until their source supplies a new expiry, even if
+enabled. If the current slide is disabled, the running carousel chooses another
+available slide; if none are available, the last image remains on the panel.
+These commands affect individual slides, not API source settings.
+
 Replacement keeps the slide's ID, title, and position. A running carousel
 refreshes the current slide after replacement and selects another available
 slide after deletion. If the gallery is empty, the last image remains on the

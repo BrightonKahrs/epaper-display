@@ -48,6 +48,30 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(self.catalog.list_slides(now=150), [])
         self.assertIsNone(self.catalog.get_slide(slide.id, now=150))
 
+    def test_slide_enabled_state_survives_refresh_replacement_and_restart(self) -> None:
+        local = self.catalog.add_image(self.image_path, "Local", now=100)
+        api = self.catalog.add_image(
+            self.image_path, "API", source="api:weather", external_id="today", now=100
+        )
+        self.catalog.set_enabled(local.id, False)
+        self.catalog.set_enabled(api.id, False)
+        self.assertFalse(self.catalog.replace_image(local.id, self.image_path).enabled)
+        refreshed = self.catalog.add_image(
+            self.image_path, "Updated", source="api:weather", external_id="today", now=200
+        )
+        self.assertFalse(refreshed.enabled)
+        reopened = Catalog(self.root / "catalog.sqlite3", self.root / "gallery")
+        self.assertEqual(reopened.list_slides(now=201), [])
+        self.assertEqual(
+            [(slide.id, slide.enabled) for slide in reopened.list_slides(now=201, include_all=True)],
+            [(local.id, False), (api.id, False)],
+        )
+        self.assertTrue(reopened.set_enabled(local.id, True).enabled)
+        self.assertEqual([slide.id for slide in reopened.list_slides(now=201)], [local.id])
+        self.assertTrue(local.path.exists())
+        with self.assertRaisesRegex(ValueError, "Slide not found"):
+            reopened.set_enabled("missing", True)
+
     def test_carousel_selection_and_deadline_survive_restart(self) -> None:
         first = self.catalog.add_image(self.image_path, now=100)
         second = self.catalog.add_image(self.image_path, now=101)

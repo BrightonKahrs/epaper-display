@@ -32,6 +32,7 @@ class Slide:
     source: str
     created_at: float
     expires_at: float | None
+    enabled: bool = True
 
 
 class Catalog:
@@ -88,6 +89,7 @@ class Catalog:
             source=row["source"],
             created_at=row["created_at"],
             expires_at=row["expires_at"],
+            enabled=bool(row["enabled"]),
         )
 
     def _active_rows(self, connection: sqlite3.Connection, now: float) -> list[sqlite3.Row]:
@@ -169,8 +171,7 @@ class Catalog:
                         filename = excluded.filename,
                         source = excluded.source,
                         external_id = excluded.external_id,
-                        expires_at = excluded.expires_at,
-                        enabled = 1
+                        expires_at = excluded.expires_at
                     """,
                     (
                         slide_id,
@@ -182,6 +183,7 @@ class Catalog:
                         expires_at,
                     ),
                 )
+                enabled = bool(old["enabled"]) if old else True
                 if replace_local:
                     connection.execute(
                         """
@@ -209,7 +211,7 @@ class Catalog:
                 ).fetchone()
                 if current is None or current["filename"] != old_filename:
                     (self.gallery_dir / old_filename).unlink(missing_ok=True)
-        return Slide(slide_id, title, destination, source, created_at, expires_at)
+        return Slide(slide_id, title, destination, source, created_at, expires_at, enabled)
 
     @staticmethod
     def _require_local_slide(row: sqlite3.Row | None, slide_id: str) -> None:
@@ -295,11 +297,32 @@ class Catalog:
             created_at,
         )
 
-    def list_slides(self, now: float | None = None) -> list[Slide]:
+    def list_slides(self, now: float | None = None, *, include_all: bool = False) -> list[Slide]:
         timestamp = now if now is not None else datetime.now().timestamp()
         with self._connect() as connection:
-            rows = self._active_rows(connection, timestamp)
+            if include_all:
+                rows = connection.execute(
+                    "SELECT * FROM slides ORDER BY created_at, id"
+                ).fetchall()
+            else:
+                rows = self._active_rows(connection, timestamp)
         return [self._slide_from_row(row) for row in rows]
+
+    def set_enabled(self, slide_id: str, enabled: bool) -> Slide:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM slides WHERE id = ?", (slide_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Slide not found: {slide_id}")
+            connection.execute(
+                "UPDATE slides SET enabled = ? WHERE id = ?", (int(enabled), slide_id)
+            )
+            updated = connection.execute(
+                "SELECT * FROM slides WHERE id = ?", (slide_id,)
+            ).fetchone()
+        return self._slide_from_row(updated)
 
     def get_slide(self, slide_id: str, now: float | None = None) -> Slide | None:
         timestamp = now if now is not None else datetime.now().timestamp()

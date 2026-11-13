@@ -35,12 +35,18 @@ def _parser() -> argparse.ArgumentParser:
     add = commands.add_parser("add", help="Add one or more local image files to the gallery.")
     add.add_argument("images", nargs="+", type=Path)
 
-    commands.add_parser("list", help="List non-expired slides.")
+    list_command = commands.add_parser("list", help="List active slides.")
+    list_command.add_argument(
+        "--all", action="store_true", help="Include disabled and expired slides."
+    )
     replace = commands.add_parser("replace", help="Replace the image for a local slide.")
     replace.add_argument("slide_id", help="Slide ID, or 'pick' for an interactive menu.")
     replace.add_argument("image", type=Path)
     delete = commands.add_parser("delete", help="Delete a local slide and its gallery image.")
     delete.add_argument("slide_id", help="Slide ID, or 'pick' for an interactive menu.")
+    for action in ("enable", "disable"):
+        command = commands.add_parser(action, help=f"{action.capitalize()} a slide.")
+        command.add_argument("slide_id", help="Slide ID, or 'pick' for an interactive menu.")
     commands.add_parser("pick", help="Choose a slide from an interactive arrow-key menu.")
     select = commands.add_parser("show", help="Select a slide by ID.")
     select.add_argument("slide_id")
@@ -96,11 +102,17 @@ def _make_source_registry(config: AppConfig) -> ApiSourceRegistry:
     return ApiSourceRegistry(config.api_specs_database_path)
 
 
-def _pick_slide(catalog: Catalog, now: float, *, local_only: bool = False) -> str | None:
-    slides = catalog.list_slides(now)
+def _pick_slide(
+    catalog: Catalog, now: float, *, local_only: bool = False, enabled: bool | None = None
+) -> str | None:
+    slides = catalog.list_slides(now, include_all=local_only or enabled is not None)
     if local_only:
         slides = [slide for slide in slides if slide.source == "ssh"]
+    if enabled is not None:
+        slides = [slide for slide in slides if slide.enabled == enabled]
     if not slides:
+        if enabled is not None:
+            raise ValueError(f"No {'enabled' if enabled else 'disabled'} slides.")
         if local_only:
             raise ValueError("No available local slides. Add images with 'epaper-display add'.")
         raise ValueError("No available slides. Add images with 'epaper-display add'.")
@@ -111,7 +123,12 @@ def _pick_slide(catalog: Catalog, now: float, *, local_only: bool = False) -> st
         )
     current_id = catalog.get_state("current_slide_id")
     choices = [
-        questionary.Choice(f"{slide.title} ({slide.id})", value=slide.id)
+        questionary.Choice(
+            f"{slide.title} ({slide.id})"
+            + (" [disabled]" if not slide.enabled else "")
+            + (" [expired]" if slide.expires_at is not None and slide.expires_at <= now else ""),
+            value=slide.id,
+        )
         for slide in slides
     ]
     default_id = current_id if any(slide.id == current_id for slide in slides) else None
@@ -168,8 +185,25 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{slide.id}\t{slide.title}")
             return 0
         if args.command == "list":
-            for slide in catalog.list_slides(now):
-                print(f"{slide.id}\t{slide.title}\t{slide.source}")
+            for slide in catalog.list_slides(now, include_all=args.all):
+                line = f"{slide.id}\t{slide.title}\t{slide.source}"
+                if args.all:
+                    line += f"\t{'enabled' if slide.enabled else 'disabled'}"
+                    if slide.expires_at is not None and slide.expires_at <= now:
+                        line += "\texpired"
+                print(line)
+            return 0
+        if args.command in ("enable", "disable"):
+            slide_id = args.slide_id
+            if slide_id == "pick":
+                slide_id = _pick_slide(catalog, now, enabled=args.command == "disable")
+                if slide_id is None:
+                    print(f"{args.command.capitalize()} cancelled.")
+                    return 0
+            slide = catalog.set_enabled(slide_id, args.command == "enable")
+            print(f"{args.command.capitalize()}d {slide.id}: {slide.title}")
+            if slide.enabled and slide.expires_at is not None and slide.expires_at <= now:
+                print("The slide is expired and will not appear until its source refreshes it.")
             return 0
         if args.command == "replace":
             slide_id = args.slide_id

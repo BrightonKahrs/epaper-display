@@ -12,6 +12,35 @@ from epaper_display.source_registry import ApiSourceRegistry
 
 
 class ServiceTests(unittest.TestCase):
+    def test_disabling_current_slide_switches_and_reenabling_restores_eligibility(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            catalog = Catalog(root / "catalog.sqlite3", root / "gallery")
+            sources = ApiSourceRegistry(root / "api-specs.sqlite3")
+            preview = root / "preview.png"
+            red, blue = root / "red.png", root / "blue.png"
+            Image.new("RGB", (20, 20), "red").save(red)
+            Image.new("RGB", (20, 20), "blue").save(blue)
+            first = catalog.add_image(red, now=100)
+            second = catalog.add_image(blue, now=101)
+            service = CarouselService(
+                AppConfig(root, interval_seconds=1800), catalog, sources, PreviewDisplay(preview)
+            )
+            service.tick(now=102)
+            catalog.set_enabled(first.id, False)
+            service.tick(now=103)
+            self.assertEqual(catalog.get_state("current_slide_id"), second.id)
+            with Image.open(preview) as image:
+                self.assertEqual(image.getpixel((800, 600)), (0, 0, 255))
+            catalog.set_enabled(second.id, False)
+            service.tick(now=104)
+            self.assertFalse(catalog.get_state("current_slide_id"))
+            catalog.set_enabled(first.id, True)
+            service.tick(now=105)
+            self.assertEqual(catalog.get_state("current_slide_id"), first.id)
+            with Image.open(preview) as image:
+                self.assertEqual(image.getpixel((800, 600)), (255, 0, 0))
+
     def test_replacing_and_deleting_current_slide_updates_running_service(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
