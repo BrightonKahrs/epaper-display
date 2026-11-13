@@ -10,7 +10,7 @@ contract, and [hardware_spec.md](hardware_spec.md) for the parts list.
 
 ## Develop and preview
 
-Requires Python 3.11 or later and Pillow:
+Requires Python 3.11 or later. Installation includes Pillow and Questionary:
 
 ```sh
 python -m pip install -e .
@@ -49,6 +49,33 @@ installation path, and GPIO access for your Pi. `StateDirectory` ensures the
 two SQLite databases and image gallery are created at
 `/var/lib/epaper-display` on the microSD card.
 
+### Experimental fast refresh
+
+The default `epaper-display run` uses the driver's normal refresh speed. For
+faster physical slide changes on supported Spectra 6 displays, use:
+
+```sh
+epaper-display run --fast
+```
+
+This requires Inky 2.6.0 or newer (included by the hardware extra). In an
+existing virtual environment, upgrade with
+`python -m pip install --upgrade '.[hardware]'`.
+
+[Pimoroni's Inky 2.6.0 release notes](https://github.com/pimoroni/inky/releases/tag/v2.6.0)
+report roughly 19-20 seconds for a normal 13.3-inch refresh versus 8-9 seconds
+in FAST mode, plus driver overhead and application image preparation time.
+FAST is experimental: colours can shift, especially blue and green, and
+long-term effects on ghosting, image retention, and panel lifetime have not
+been evaluated. Normal mode remains the default; the driver update also
+reduces overhead without enabling FAST.
+
+The flag changes the panel refresh speed, not the 30-minute carousel interval.
+It cannot be combined with `--preview`; unsupported drivers/displays report an
+error instead of silently ignoring the flag. Stop any running service before
+starting a foreground process that uses the panel. For systemd use, append
+`--fast` to the unit's `ExecStart`, then reload and restart the service.
+
 ## Control over SSH
 
 Once installed and running, invoke the CLI on the Pi using SSH:
@@ -56,6 +83,7 @@ Once installed and running, invoke the CLI on the Pi using SSH:
 ```sh
 ssh pi@raspberrypi 'epaper-display status'
 ssh pi@raspberrypi 'epaper-display list'
+ssh -t pi@raspberrypi 'epaper-display pick'
 ssh pi@raspberrypi 'epaper-display next'
 ssh pi@raspberrypi 'epaper-display previous'
 ssh pi@raspberrypi 'epaper-display show <slide-id>'
@@ -69,9 +97,15 @@ scp ./my-slide.png pi@raspberrypi:/tmp/my-slide.png
 ssh pi@raspberrypi 'epaper-display add /tmp/my-slide.png'
 ```
 
-The `show`, `next`, and `previous` commands persist the selection. The running
-service draws it on its next poll; if the service is stopped, it displays that
-selection when it starts.
+Use `epaper-display pick` in a Pi terminal to browse available slides with the
+Up/Down arrow keys and press Enter to select one. The menu starts on the current
+slide when available; Ctrl+C cancels without changing the selection. Slides
+include their IDs so duplicate titles are distinguishable. For a direct SSH
+command, use `ssh -t` as above to allocate an interactive terminal.
+
+The `pick`, `show`, `next`, and `previous` commands persist the selection. The
+running service draws it on its next poll; if the service is stopped, it
+displays that selection when it starts.
 
 ## API sources
 

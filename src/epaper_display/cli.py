@@ -9,6 +9,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import questionary
+
 from epaper_display import __version__
 from epaper_display.catalog import Catalog
 from epaper_display.config import AppConfig
@@ -34,6 +36,7 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("images", nargs="+", type=Path)
 
     commands.add_parser("list", help="List non-expired slides.")
+    commands.add_parser("pick", help="Choose a slide from an interactive arrow-key menu.")
     select = commands.add_parser("show", help="Select a slide by ID.")
     select.add_argument("slide_id")
     commands.add_parser("next", help="Advance to the next slide.")
@@ -41,10 +44,16 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("status", help="Show carousel and API source status.")
 
     run = commands.add_parser("run", help="Run the carousel and API refresh worker.")
-    run.add_argument(
+    display_options = run.add_mutually_exclusive_group()
+    display_options.add_argument(
         "--preview",
         type=Path,
         help="Save rendered output to a PNG instead of using the Inky hardware.",
+    )
+    display_options.add_argument(
+        "--fast",
+        action="store_true",
+        help="Use experimental Spectra 6 fast refresh (colour shifts; long-term effects unknown).",
     )
     refresh = commands.add_parser(
         "refresh", help="Refresh configured API sources if their TTL expired."
@@ -87,13 +96,15 @@ def _run_service(
     catalog: Catalog,
     source_registry: ApiSourceRegistry,
     preview: Path | None,
+    *,
+    fast: bool = False,
 ) -> None:
     display = (
         PreviewDisplay(
             preview, config.display_orientation, config.portrait_rotation_degrees
         )
         if preview
-        else InkyDisplay()
+        else InkyDisplay(fast=fast)
     )
     service = CarouselService(config, catalog, source_registry, display)
 
@@ -125,6 +136,35 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "list":
             for slide in catalog.list_slides(now):
                 print(f"{slide.id}\t{slide.title}\t{slide.source}")
+            return 0
+        if args.command == "pick":
+            slides = catalog.list_slides(now)
+            if not slides:
+                raise ValueError("No available slides. Add images with 'epaper-display add'.")
+            if not sys.stdin.isatty() or not sys.stdout.isatty():
+                raise ValueError(
+                    "'pick' requires an interactive terminal. Over SSH, use 'ssh -t', "
+                    "or use 'epaper-display list' and 'epaper-display show <slide-id>'."
+                )
+            current_id = catalog.get_state("current_slide_id")
+            choices = [
+                questionary.Choice(f"{slide.title} ({slide.id})", value=slide.id)
+                for slide in slides
+            ]
+            default_id = current_id if any(slide.id == current_id for slide in slides) else None
+            try:
+                selected_id = questionary.select(
+                    "Choose a slide (arrow keys, Enter to select, Ctrl+C to cancel):",
+                    choices=choices,
+                    default=default_id,
+                ).ask(kbi_msg="")
+            except EOFError:
+                selected_id = None
+            if selected_id is None:
+                print("Selection cancelled.")
+                return 0
+            slide = catalog.select_slide(selected_id, time.time(), config.interval_seconds)
+            print(f"Selected {slide.id}: {slide.title}")
             return 0
         if args.command == "show":
             slide = catalog.select_slide(args.slide_id, now, config.interval_seconds)
@@ -217,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Removed API source {args.source_id}.")
                 return 0
         if args.command == "run":
-            _run_service(config, catalog, source_registry, args.preview)
+            _run_service(config, catalog, source_registry, args.preview, fast=args.fast)
             return 0
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         print(f"epaper-display: {exc}", file=sys.stderr)

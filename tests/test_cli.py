@@ -2,10 +2,19 @@ import contextlib
 import io
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
-from epaper_display.cli import main
+import questionary
+from PIL import Image
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
+
+from epaper_display.catalog import Catalog
+from epaper_display.cli import _run_service, main
+from epaper_display.config import AppConfig
 
 
 class CliTests(unittest.TestCase):
@@ -104,6 +113,157 @@ class CliTests(unittest.TestCase):
 
             self.assertTrue((root / "state" / "api-specs.sqlite3").is_file())
             self.assertTrue((root / "state" / "catalog.sqlite3").is_file())
+
+
+class PickerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.root = Path(self.temporary_directory.name)
+        self.config = self.root / "config.json"
+        self.config.write_text(
+            json.dumps({"data_dir": str(self.root / "state")}), encoding="utf-8"
+        )
+        self.environment = patch.dict(
+            "os.environ", {"EPAPER_DATA_DIR": str(self.root / "state")}
+        )
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.catalog = Catalog(
+            self.root / "state" / "catalog.sqlite3", self.root / "state" / "gallery"
+        )
+        self.image = self.root / "slide.png"
+        Image.new("RGB", (20, 20), "red").save(self.image)
+
+    def run_pick(self, *, terminal: bool = True) -> tuple[int, str, str]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+            patch("sys.stdin.isatty", return_value=terminal),
+            patch("sys.stdout.isatty", return_value=terminal),
+        ):
+            result = main(["--config", str(self.config), "pick"])
+        return result, stdout.getvalue(), stderr.getvalue()
+
+    def test_arrow_keys_select_and_persist_slide_from_real_menu(self) -> None:
+        first = self.catalog.add_image(self.image, "Same title", now=10)
+        second = self.catalog.add_image(self.image, "Same title", now=20)
+        self.catalog.add_image(self.image, "Expired", now=30, expires_at=50)
+        self.catalog.select_slide(first.id, now=90, interval_seconds=1800)
+        real_select = questionary.select
+
+        with create_pipe_input() as keyboard:
+            keyboard.send_text("\x1b[B\r")
+
+            def select(*args, **kwargs):
+                return real_select(*args, **kwargs, input=keyboard, output=DummyOutput())
+
+            before_selection = time.time()
+            with patch(
+                "epaper_display.cli.questionary.select", side_effect=select
+            ) as menu:
+                result, stdout, stderr = self.run_pick()
+            after_selection = time.time()
+
+        self.assertEqual(result, 0, stderr)
+        self.assertIn(f"Selected {second.id}: Same title", stdout)
+        choices = menu.call_args.kwargs["choices"]
+        self.assertEqual([choice.value for choice in choices], [first.id, second.id])
+        self.assertNotEqual(choices[0].title, choices[1].title)
+        self.assertEqual(menu.call_args.kwargs["default"], first.id)
+        reopened = Catalog(self.catalog.database_path, self.catalog.gallery_dir)
+        self.assertEqual(reopened.get_state("current_slide_id"), second.id)
+        deadline = float(reopened.get_state("next_transition_at"))
+        self.assertGreaterEqual(deadline, before_selection + 1800)
+        self.assertLessEqual(deadline, after_selection + 1800)
+
+    def test_cancellation_leaves_selection_and_deadline_unchanged(self) -> None:
+        slide = self.catalog.add_image(self.image, now=10)
+        self.catalog.select_slide(slide.id, now=90, interval_seconds=1800)
+        for outcome in (None, EOFError()):
+            with self.subTest(outcome=outcome):
+                with patch("epaper_display.cli.questionary.select") as menu:
+                    if isinstance(outcome, EOFError):
+                        menu.return_value.ask.side_effect = outcome
+                    else:
+                        menu.return_value.ask.return_value = outcome
+                    result, stdout, stderr = self.run_pick()
+                self.assertEqual(result, 0, stderr)
+                self.assertIn("cancelled", stdout)
+                self.assertEqual(self.catalog.get_state("current_slide_id"), slide.id)
+                self.assertEqual(float(self.catalog.get_state("next_transition_at")), 1890)
+
+    def test_empty_gallery_reports_how_to_add_slides(self) -> None:
+        with patch("epaper_display.cli.questionary.select") as menu:
+            result, _, stderr = self.run_pick()
+        self.assertEqual(result, 2)
+        self.assertIn("No available slides", stderr)
+        menu.assert_not_called()
+
+    def test_noninteractive_terminal_reports_ssh_guidance(self) -> None:
+        self.catalog.add_image(self.image)
+        with patch("epaper_display.cli.questionary.select") as menu:
+            result, _, stderr = self.run_pick(terminal=False)
+        self.assertEqual(result, 2)
+        self.assertIn("ssh -t", stderr)
+        menu.assert_not_called()
+
+    def test_slide_expiring_while_menu_is_open_cannot_be_selected(self) -> None:
+        slide = self.catalog.add_image(self.image, now=10, expires_at=120)
+        with (
+            patch("epaper_display.cli.questionary.select") as menu,
+            patch("epaper_display.cli.time.time", side_effect=[100, 150]),
+        ):
+            menu.return_value.ask.return_value = slide.id
+            result, _, stderr = self.run_pick()
+        self.assertEqual(result, 2)
+        self.assertIn("Slide not found or expired", stderr)
+        self.assertIsNone(self.catalog.get_state("current_slide_id"))
+
+
+class RunOptionsTests(unittest.TestCase):
+    def test_run_passes_opt_in_fast_flag_to_service(self) -> None:
+        config = AppConfig(Path("unused"))
+        for arguments, expected_fast in ((["run"], False), (["run", "--fast"], True)):
+            with self.subTest(arguments=arguments):
+                with (
+                    patch("epaper_display.cli.AppConfig.load", return_value=config),
+                    patch("epaper_display.cli._make_catalog") as catalog,
+                    patch("epaper_display.cli._make_source_registry") as registry,
+                    patch("epaper_display.cli._run_service") as run,
+                ):
+                    self.assertEqual(main(arguments), 0)
+                    run.assert_called_once_with(
+                        config,
+                        catalog.return_value,
+                        registry.return_value,
+                        None,
+                        fast=expected_fast,
+                    )
+
+    def test_service_passes_fast_flag_to_hardware_adapter(self) -> None:
+        config = AppConfig(Path("unused"))
+        catalog, registry = Mock(), Mock()
+        with (
+            patch("epaper_display.cli.InkyDisplay") as display,
+            patch("epaper_display.cli.CarouselService") as service,
+            patch("epaper_display.cli.signal.signal"),
+        ):
+            _run_service(config, catalog, registry, None, fast=True)
+        display.assert_called_once_with(fast=True)
+        service.assert_called_once_with(config, catalog, registry, display.return_value)
+        service.return_value.run.assert_called_once_with()
+
+    def test_fast_and_preview_cannot_be_combined(self) -> None:
+        stderr = io.StringIO()
+        with (
+            contextlib.redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as error,
+        ):
+            main(["run", "--fast", "--preview", "preview.png"])
+        self.assertEqual(error.exception.code, 2)
+        self.assertIn("not allowed with argument", stderr.getvalue())
 
 
 if __name__ == "__main__":

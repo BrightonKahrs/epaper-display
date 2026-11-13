@@ -1,9 +1,13 @@
+import logging
 from pathlib import Path
 from typing import Protocol
 
 from PIL import Image
 
 from epaper_display.render import prepare_image
+
+
+logger = logging.getLogger(__name__)
 
 
 class Display(Protocol):
@@ -14,7 +18,7 @@ class Display(Protocol):
 
 
 class InkyDisplay:
-    def __init__(self) -> None:
+    def __init__(self, *, fast: bool = False) -> None:
         try:
             from inky.auto import auto
         except ImportError as exc:
@@ -23,6 +27,18 @@ class InkyDisplay:
                 "'pip install epaper-display[hardware]'."
             ) from exc
         self._display = auto()
+        if fast:
+            if not hasattr(self._display, "FAST") or not hasattr(self._display, "speed"):
+                raise ValueError(
+                    "--fast requires a supported Spectra 6 display and Inky 2.6.0 "
+                    "or newer. Upgrade with 'python -m pip install --upgrade inky', "
+                    "or run without --fast."
+                )
+            self._display.speed = self._display.FAST
+            logger.warning(
+                "Experimental FAST refresh enabled: colours may shift; long-term "
+                "ghosting, image retention, and panel lifetime effects are unknown."
+            )
 
     @property
     def resolution(self) -> tuple[int, int]:

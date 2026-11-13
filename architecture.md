@@ -59,7 +59,8 @@ flowchart LR
 ### Input and integration modules
 
 - **SSH CLI (`cli.py`)** handles explicit user actions: importing local images,
-  selecting slides, reporting status, triggering refreshes, and managing API
+  selecting slides (including the interactive `pick` menu), reporting status,
+  triggering refreshes, and managing API
   source specifications. It calls the registry or catalog directly and does
   not implement persistence itself.
 - **External API adapter (`api_client.py`)** issues bounded HTTP requests, applies
@@ -94,7 +95,9 @@ flowchart LR
 - **Display service and adapters (`display.py`)** prepare a slide using the
   renderer, then send it through Pimoroni's Inky library on the Pi or save a
   preview PNG during development. The Inky adapter is in this same file, not
-  a separate component.
+  a separate component. `run --fast` opts into the driver's experimental FAST
+  refresh on supported Spectra 6 panels (Inky 2.6.0+); it does not change
+  carousel timing. Normal refresh is the default.
 
 The shared runtime configuration is in `src/epaper_display/config.py`;
 `deploy/epaper-display.service` starts the application as a systemd service.
