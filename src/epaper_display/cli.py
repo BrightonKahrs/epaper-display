@@ -37,10 +37,10 @@ def _parser() -> argparse.ArgumentParser:
 
     commands.add_parser("list", help="List non-expired slides.")
     replace = commands.add_parser("replace", help="Replace the image for a local slide.")
-    replace.add_argument("slide_id")
+    replace.add_argument("slide_id", help="Slide ID, or 'pick' for an interactive menu.")
     replace.add_argument("image", type=Path)
     delete = commands.add_parser("delete", help="Delete a local slide and its gallery image.")
-    delete.add_argument("slide_id")
+    delete.add_argument("slide_id", help="Slide ID, or 'pick' for an interactive menu.")
     commands.add_parser("pick", help="Choose a slide from an interactive arrow-key menu.")
     select = commands.add_parser("show", help="Select a slide by ID.")
     select.add_argument("slide_id")
@@ -96,6 +96,35 @@ def _make_source_registry(config: AppConfig) -> ApiSourceRegistry:
     return ApiSourceRegistry(config.api_specs_database_path)
 
 
+def _pick_slide(catalog: Catalog, now: float, *, local_only: bool = False) -> str | None:
+    slides = catalog.list_slides(now)
+    if local_only:
+        slides = [slide for slide in slides if slide.source == "ssh"]
+    if not slides:
+        if local_only:
+            raise ValueError("No available local slides. Add images with 'epaper-display add'.")
+        raise ValueError("No available slides. Add images with 'epaper-display add'.")
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise ValueError(
+            "'pick' requires an interactive terminal. Over SSH, use 'ssh -t', "
+            "or use 'epaper-display list' and a slide ID."
+        )
+    current_id = catalog.get_state("current_slide_id")
+    choices = [
+        questionary.Choice(f"{slide.title} ({slide.id})", value=slide.id)
+        for slide in slides
+    ]
+    default_id = current_id if any(slide.id == current_id for slide in slides) else None
+    try:
+        return questionary.select(
+            "Choose a slide (arrow keys, Enter to select, Ctrl+C to cancel):",
+            choices=choices,
+            default=default_id,
+        ).ask(kbi_msg="")
+    except EOFError:
+        return None
+
+
 def _run_service(
     config: AppConfig,
     catalog: Catalog,
@@ -143,36 +172,36 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{slide.id}\t{slide.title}\t{slide.source}")
             return 0
         if args.command == "replace":
-            slide = catalog.replace_image(args.slide_id, args.image)
+            slide_id = args.slide_id
+            if slide_id == "pick":
+                slide_id = _pick_slide(catalog, now, local_only=True)
+                if slide_id is None:
+                    print("Replacement cancelled.")
+                    return 0
+            slide = catalog.replace_image(slide_id, args.image)
             print(f"Replaced {slide.id}: {slide.title}")
             return 0
         if args.command == "delete":
-            catalog.delete_slide(args.slide_id)
-            print(f"Deleted {args.slide_id}.")
+            slide_id = args.slide_id
+            if slide_id == "pick":
+                slide_id = _pick_slide(catalog, now, local_only=True)
+                if slide_id is None:
+                    print("Deletion cancelled.")
+                    return 0
+                try:
+                    confirmed = questionary.confirm(
+                        f"Delete slide {slide_id} permanently?", default=False
+                    ).ask(kbi_msg="")
+                except EOFError:
+                    confirmed = False
+                if not confirmed:
+                    print("Deletion cancelled.")
+                    return 0
+            catalog.delete_slide(slide_id)
+            print(f"Deleted {slide_id}.")
             return 0
         if args.command == "pick":
-            slides = catalog.list_slides(now)
-            if not slides:
-                raise ValueError("No available slides. Add images with 'epaper-display add'.")
-            if not sys.stdin.isatty() or not sys.stdout.isatty():
-                raise ValueError(
-                    "'pick' requires an interactive terminal. Over SSH, use 'ssh -t', "
-                    "or use 'epaper-display list' and 'epaper-display show <slide-id>'."
-                )
-            current_id = catalog.get_state("current_slide_id")
-            choices = [
-                questionary.Choice(f"{slide.title} ({slide.id})", value=slide.id)
-                for slide in slides
-            ]
-            default_id = current_id if any(slide.id == current_id for slide in slides) else None
-            try:
-                selected_id = questionary.select(
-                    "Choose a slide (arrow keys, Enter to select, Ctrl+C to cancel):",
-                    choices=choices,
-                    default=default_id,
-                ).ask(kbi_msg="")
-            except EOFError:
-                selected_id = None
+            selected_id = _pick_slide(catalog, now)
             if selected_id is None:
                 print("Selection cancelled.")
                 return 0

@@ -160,6 +160,80 @@ class PickerTests(unittest.TestCase):
         self.assertIn(f"Deleted {slide.id}", output.getvalue())
         self.assertEqual(self.catalog.list_slides(), [])
 
+    def test_replace_pick_uses_arrow_keys_and_excludes_api_slides(self) -> None:
+        first = self.catalog.add_image(self.image, "First", now=10)
+        self.catalog.add_image(
+            self.image, "API", source="api:weather", external_id="today", now=11
+        )
+        second = self.catalog.add_image(self.image, "Second", now=12)
+        self.catalog.select_slide(first.id, now=90, interval_seconds=1800)
+        replacement = self.root / "replacement.png"
+        Image.new("RGB", (20, 20), "blue").save(replacement)
+        real_select = questionary.select
+        output = io.StringIO()
+        with create_pipe_input() as keyboard:
+            keyboard.send_text("\x1b[B\r")
+
+            def select(*args, **kwargs):
+                return real_select(*args, **kwargs, input=keyboard, output=DummyOutput())
+
+            with (
+                contextlib.redirect_stdout(output),
+                patch("sys.stdin.isatty", return_value=True),
+                patch("sys.stdout.isatty", return_value=True),
+                patch("epaper_display.cli.questionary.select", side_effect=select) as menu,
+            ):
+                result = main(["--config", str(self.config), "replace", "pick", str(replacement)])
+        self.assertEqual(result, 0)
+        self.assertIn(f"Replaced {second.id}: Second", output.getvalue())
+        self.assertEqual(
+            [choice.value for choice in menu.call_args.kwargs["choices"]],
+            [first.id, second.id],
+        )
+        with Image.open(second.path) as image:
+            self.assertEqual(image.getpixel((0, 0)), (0, 0, 255))
+        self.assertEqual(self.catalog.get_state("current_slide_id"), first.id)
+
+    def test_delete_pick_requires_confirmation_and_preserves_cancelled_slide(self) -> None:
+        slide = self.catalog.add_image(self.image)
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
+            patch("epaper_display.cli.questionary.select") as menu,
+            patch("epaper_display.cli.questionary.confirm") as confirm,
+        ):
+            menu.return_value.ask.return_value = slide.id
+            confirm.return_value.ask.return_value = False
+            self.assertEqual(main(["--config", str(self.config), "delete", "pick"]), 0)
+            self.assertTrue(slide.path.exists())
+            confirm.return_value.ask.return_value = True
+            self.assertEqual(main(["--config", str(self.config), "delete", "pick"]), 0)
+        self.assertFalse(slide.path.exists())
+        self.assertEqual(self.catalog.list_slides(), [])
+        self.assertFalse(confirm.call_args.kwargs["default"])
+
+    def test_management_pickers_handle_cancellation_and_noninteractive_terminal(self) -> None:
+        slide = self.catalog.add_image(self.image)
+        for command in (["replace", "pick", str(self.image)], ["delete", "pick"]):
+            with self.subTest(command=command):
+                with (
+                    contextlib.redirect_stdout(io.StringIO()),
+                    patch("sys.stdin.isatty", return_value=True),
+                    patch("sys.stdout.isatty", return_value=True),
+                    patch("epaper_display.cli.questionary.select") as menu,
+                ):
+                    menu.return_value.ask.return_value = None
+                    self.assertEqual(main(["--config", str(self.config), *command]), 0)
+                stderr = io.StringIO()
+                with (
+                    patch("sys.stdin.isatty", return_value=False),
+                    contextlib.redirect_stderr(stderr),
+                ):
+                    self.assertEqual(main(["--config", str(self.config), *command]), 2)
+                self.assertIn("ssh -t", stderr.getvalue())
+                self.assertTrue(slide.path.exists())
+
     def test_arrow_keys_select_and_persist_slide_from_real_menu(self) -> None:
         first = self.catalog.add_image(self.image, "Same title", now=10)
         second = self.catalog.add_image(self.image, "Same title", now=20)

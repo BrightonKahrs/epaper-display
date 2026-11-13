@@ -96,6 +96,16 @@ epaper-display replace <slide-id> /tmp/updated-slide.png
 epaper-display delete <slide-id>
 ```
 
+To choose a local slide with the arrow-key menu instead of typing its ID:
+
+```sh
+epaper-display replace pick /tmp/updated-slide.png
+epaper-display delete pick
+```
+
+The delete menu asks for confirmation; cancelling leaves the slide unchanged.
+These interactive commands require a terminal (use `ssh -t` for direct SSH).
+
 Replacement keeps the slide's ID, title, and position. A running carousel
 refreshes the current slide after replacement and selects another available
 slide after deletion. If the gallery is empty, the last image remains on the
