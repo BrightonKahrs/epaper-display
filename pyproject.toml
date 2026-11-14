@@ -14,6 +14,7 @@ hardware = ["inky>=2.6.0"]
 
 [project.scripts]
 epaper-display = "epaper_display.cli:main"
+epd = "epaper_display.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

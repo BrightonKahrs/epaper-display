@@ -26,8 +26,17 @@ def _timestamp(value: str | None) -> str | None:
     return datetime.fromtimestamp(float(value), timezone.utc).isoformat()
 
 
+def _add_slide_target(parser: argparse.ArgumentParser) -> None:
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("slide_id", nargs="?", help="Slide ID.")
+    target.add_argument("--pick", action="store_true", help="Choose a slide interactively.")
+
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="epaper-display")
+    executable = Path(sys.argv[0]).stem
+    parser = argparse.ArgumentParser(
+        prog=executable if executable in ("epaper-display", "epd") else "epaper-display"
+    )
     parser.add_argument("--config", type=Path, help="Path to the JSON configuration file.")
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -40,13 +49,13 @@ def _parser() -> argparse.ArgumentParser:
         "--all", action="store_true", help="Include disabled and expired slides."
     )
     replace = commands.add_parser("replace", help="Replace the image for a local slide.")
-    replace.add_argument("slide_id", help="Slide ID, or 'pick' for an interactive menu.")
+    _add_slide_target(replace)
     replace.add_argument("image", type=Path)
     delete = commands.add_parser("delete", help="Delete a local slide and its gallery image.")
-    delete.add_argument("slide_id", help="Slide ID, or 'pick' for an interactive menu.")
+    _add_slide_target(delete)
     for action in ("enable", "disable"):
         command = commands.add_parser(action, help=f"{action.capitalize()} a slide.")
-        command.add_argument("slide_id", help="Slide ID, or 'pick' for an interactive menu.")
+        _add_slide_target(command)
     commands.add_parser("pick", help="Choose a slide from an interactive arrow-key menu.")
     select = commands.add_parser("show", help="Select a slide by ID.")
     select.add_argument("slide_id")
@@ -201,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command in ("enable", "disable"):
             slide_id = args.slide_id
-            if slide_id == "pick":
+            if args.pick:
                 slide_id = _pick_slide(catalog, now, enabled=args.command == "disable")
                 if slide_id is None:
                     print(f"{args.command.capitalize()} cancelled.")
@@ -213,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "replace":
             slide_id = args.slide_id
-            if slide_id == "pick":
+            if args.pick:
                 slide_id = _pick_slide(catalog, now, local_only=True)
                 if slide_id is None:
                     print("Replacement cancelled.")
@@ -223,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "delete":
             slide_id = args.slide_id
-            if slide_id == "pick":
+            if args.pick:
                 slide_id = _pick_slide(catalog, now, local_only=True)
                 if slide_id is None:
                     print("Deletion cancelled.")

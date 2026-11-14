@@ -13,7 +13,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from epaper_display.catalog import Catalog
-from epaper_display.cli import _run_service, main
+from epaper_display.cli import _parser, _run_service, main
 from epaper_display.config import AppConfig
 from epaper_display.source_registry import ApiSourceRegistry
 
@@ -229,13 +229,13 @@ class PickerTests(unittest.TestCase):
             patch("epaper_display.cli.questionary.select") as menu,
         ):
             menu.return_value.ask.return_value = None
-            self.assertEqual(main(["--config", str(self.config), "enable", "pick"]), 0)
+            self.assertEqual(main(["--config", str(self.config), "enable", "--pick"]), 0)
             self.assertEqual([c.value for c in menu.call_args.kwargs["choices"]], [second.id])
             self.assertFalse(self.catalog.list_slides(include_all=True)[1].enabled)
             menu.return_value.ask.return_value = second.id
-            self.assertEqual(main(["--config", str(self.config), "enable", "pick"]), 0)
+            self.assertEqual(main(["--config", str(self.config), "enable", "--pick"]), 0)
             menu.return_value.ask.return_value = first.id
-            self.assertEqual(main(["--config", str(self.config), "disable", "pick"]), 0)
+            self.assertEqual(main(["--config", str(self.config), "disable", "--pick"]), 0)
             self.assertEqual(
                 [c.value for c in menu.call_args.kwargs["choices"]], [first.id, second.id]
             )
@@ -274,7 +274,7 @@ class PickerTests(unittest.TestCase):
                 patch("sys.stdout.isatty", return_value=True),
                 patch("epaper_display.cli.questionary.select", side_effect=select) as menu,
             ):
-                result = main(["--config", str(self.config), "replace", "pick", str(replacement)])
+                result = main(["--config", str(self.config), "replace", "--pick", str(replacement)])
         self.assertEqual(result, 0)
         self.assertIn(f"Replaced {second.id}: Second", output.getvalue())
         self.assertEqual(
@@ -296,17 +296,22 @@ class PickerTests(unittest.TestCase):
         ):
             menu.return_value.ask.return_value = slide.id
             confirm.return_value.ask.return_value = False
-            self.assertEqual(main(["--config", str(self.config), "delete", "pick"]), 0)
+            self.assertEqual(main(["--config", str(self.config), "delete", "--pick"]), 0)
             self.assertTrue(slide.path.exists())
             confirm.return_value.ask.return_value = True
-            self.assertEqual(main(["--config", str(self.config), "delete", "pick"]), 0)
+            self.assertEqual(main(["--config", str(self.config), "delete", "--pick"]), 0)
         self.assertFalse(slide.path.exists())
         self.assertEqual(self.catalog.list_slides(), [])
         self.assertFalse(confirm.call_args.kwargs["default"])
 
     def test_management_pickers_handle_cancellation_and_noninteractive_terminal(self) -> None:
         slide = self.catalog.add_image(self.image)
-        for command in (["replace", "pick", str(self.image)], ["delete", "pick"]):
+        disabled = self.catalog.add_image(self.image, "Disabled", now=10)
+        self.catalog.set_enabled(disabled.id, False)
+        for command in (
+            ["replace", "--pick", str(self.image)], ["delete", "--pick"],
+            ["enable", "--pick"], ["disable", "--pick"],
+        ):
             with self.subTest(command=command):
                 with (
                     contextlib.redirect_stdout(io.StringIO()),
@@ -399,6 +404,45 @@ class PickerTests(unittest.TestCase):
         self.assertEqual(result, 2)
         self.assertIn("Slide not found or expired", stderr)
         self.assertIsNone(self.catalog.get_state("current_slide_id"))
+
+
+class CommandSyntaxTests(unittest.TestCase):
+    def test_management_commands_require_id_or_pick_but_not_both(self) -> None:
+        for command in ("delete", "replace", "enable", "disable"):
+            image = ["new.png"] if command == "replace" else []
+            with self.subTest(command=command):
+                by_id = _parser().parse_args([command, "slide-id", *image])
+                self.assertEqual(by_id.slide_id, "slide-id")
+                self.assertFalse(by_id.pick)
+                by_pick = _parser().parse_args([command, "--pick", *image])
+                self.assertIsNone(by_pick.slide_id)
+                self.assertTrue(by_pick.pick)
+                if image:
+                    self.assertEqual(by_pick.image, Path("new.png"))
+                for arguments in (
+                    [command, *image],
+                    [command, "slide-id", "--pick", *image],
+                ):
+                    with (
+                        self.subTest(arguments=arguments),
+                        contextlib.redirect_stderr(io.StringIO()),
+                        self.assertRaises(SystemExit) as error,
+                    ):
+                        _parser().parse_args(arguments)
+                    self.assertEqual(error.exception.code, 2)
+
+    def test_replacement_requires_image_with_pick(self) -> None:
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as error,
+        ):
+            _parser().parse_args(["replace", "--pick"])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_help_uses_invoked_executable_name(self) -> None:
+        for executable in ("epd", "epaper-display"):
+            with self.subTest(executable=executable), patch("sys.argv", [executable]):
+                self.assertTrue(_parser().format_help().startswith(f"usage: {executable} "))
 
 
 class RunOptionsTests(unittest.TestCase):

@@ -14,6 +14,17 @@ source .venv/bin/activate
 epaper-display --help
 ```
 
+`epd` is an equivalent installed command, not a shell-specific alias. Every
+command and option works with either name, for example `epd status`,
+`epd delete --pick`, or `epd run --fast`. Reinstall the package after pulling
+this update to create the new executable, even with an editable installation:
+
+```sh
+python -m pip install -e '.[hardware]'
+```
+
+For preview-only installations, use `python -m pip install -e .` instead.
+
 Use the **same user, configuration, and data directory** as the running carousel.
 Otherwise, your commands may control a different gallery. `epaper-display status`
 shows the paths in use. By default, data lives in
@@ -95,16 +106,20 @@ the carousel restores the selected eligible slide when it starts.
 
 ```sh
 epaper-display replace <slide-id> /tmp/updated-slide.png
-epaper-display replace pick /tmp/updated-slide.png
+epaper-display replace --pick /tmp/updated-slide.png
 epaper-display delete <slide-id>
-epaper-display delete pick
+epaper-display delete --pick
 ```
 
 These commands apply only to local slides. Replacement keeps the ID, title,
 position, and enabled state. The running carousel redraws a replaced current
 slide. Deletion permanently removes the entry and its gallery image.
 
-The management pickers include disabled and expired local slides. `delete pick`
+Provide either a slide ID or `--pick`, never both. The old positional `pick`
+syntax has been replaced by the `--pick` flag for management commands;
+the standalone `epaper-display pick` command still selects a slide for display.
+
+The management pickers include disabled and expired local slides. `delete --pick`
 asks for confirmation; deletion by ID does not. Cancelling leaves the entry
 unchanged. If the current slide is deleted, the service chooses another available
 slide. If none are available, the physical panel retains its last image.
@@ -113,9 +128,9 @@ slide. If none are available, the physical panel retains its last image.
 
 ```sh
 epaper-display disable <slide-id>
-epaper-display disable pick
+epaper-display disable --pick
 epaper-display enable <slide-id>
-epaper-display enable pick
+epaper-display enable --pick
 epaper-display list --all
 ```
 

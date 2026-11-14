@@ -47,6 +47,8 @@ The hardware extra installs Pimoroni's Inky driver. The editable install ensures
 future code pulls update the CLI's source rather than leaving an older installed
 copy. Run commands inside this virtual environment.
 
+Both `epaper-display` and the shorter `epd` executable run the same CLI.
+
 ## 3. Display your first image
 
 Import one of the checked-in portrait examples:
