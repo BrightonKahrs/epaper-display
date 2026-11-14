@@ -1,7 +1,7 @@
 # First-time setup
 
 This guide covers a Raspberry Pi installation and an optional desktop preview.
-See the [hardware specification](hardware_spec.md) for parts,
+See the [hardware architecture](hardware_architecture.md) for connections and parts,
 [CLI instructions](cli_instructions.md) for day-to-day controls, and
 [project overview](README.md) for a summary.
 
