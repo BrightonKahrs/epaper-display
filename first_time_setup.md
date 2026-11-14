@@ -174,6 +174,7 @@ sudo systemctl restart epaper-display
 
 API tokens and experimental fast refresh are optional; their configuration and
 limitations are covered in [CLI instructions](cli_instructions.md).
+Optional OpenTelemetry setup is covered in [observability](observability.md).
 
 ## Optional: develop or preview without a Pi
 

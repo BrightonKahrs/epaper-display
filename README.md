@@ -29,3 +29,4 @@ and a Philadelphia-themed slide.
 | [CLI instructions](cli_instructions.md)           | Add and manage slides, control playback, configure API sources, and update the app.         |
 | [Software architecture](software_architecture.md) | Components, persistent storage, rendering, and API source contracts.                        |
 | [Hardware architecture](hardware_architecture.md) | Hardware connections, a system diagram, parts, and purchasing links.                        |
+| [Observability](observability.md) | Optional OpenTelemetry logs, metrics, and collector configuration. |

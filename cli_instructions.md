@@ -172,6 +172,9 @@ epaper-display run --preview preview.png
 This runs the carousel but writes the rendered image to a PNG rather than the
 panel. The default preview is upright portrait at 1200 x 1600 pixels.
 
+See [observability](observability.md) for optional OpenTelemetry logs and metrics
+for the running carousel and manual source refreshes.
+
 ## Experimental fast refresh
 
 ```sh

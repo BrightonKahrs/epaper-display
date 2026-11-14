@@ -105,6 +105,9 @@ flowchart LR
 
 The shared runtime configuration is in `src/epaper_display/config.py`;
 `deploy/epaper-display.service` starts the application as a systemd service.
+Optional OpenTelemetry instrumentation in `telemetry.py` records bounded
+display and source-refresh events and metrics without changing gallery storage.
+See [observability](observability.md) for exporters, privacy, and setup.
 
 ## Data ownership and persistence
 

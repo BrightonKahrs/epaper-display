@@ -498,8 +498,23 @@ class RunOptionsTests(unittest.TestCase):
         ):
             _run_service(config, catalog, registry, None, fast=True)
         display.assert_called_once_with(fast=True)
-        service.assert_called_once_with(config, catalog, registry, display.return_value)
+        service.assert_called_once_with(
+            config, catalog, registry, display.return_value, telemetry=None
+        )
         service.return_value.run.assert_called_once_with()
+
+    def test_service_shuts_down_telemetry_when_run_raises(self) -> None:
+        config = AppConfig(Path("unused"))
+        with (
+            patch("epaper_display.cli.InkyDisplay"),
+            patch("epaper_display.cli.CarouselService") as service,
+            patch("epaper_display.cli.create_telemetry") as create,
+            patch("epaper_display.cli.signal.signal"),
+        ):
+            service.return_value.run.side_effect = OSError("panel failed")
+            with self.assertRaisesRegex(OSError, "panel failed"):
+                _run_service(config, Mock(), Mock(), None)
+            create.return_value.shutdown.assert_called_once_with()
 
     def test_fast_and_preview_cannot_be_combined(self) -> None:
         stderr = io.StringIO()

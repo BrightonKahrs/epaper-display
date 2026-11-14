@@ -18,6 +18,7 @@ from epaper_display.display import InkyDisplay, PreviewDisplay
 from epaper_display.refresh_worker import refresh_due_sources
 from epaper_display.service import CarouselService
 from epaper_display.source_registry import ApiSource, ApiSourceRegistry
+from epaper_display.telemetry import create_telemetry
 
 
 def _timestamp(value: str | None) -> str | None:
@@ -174,14 +175,19 @@ def _run_service(
         if preview
         else InkyDisplay(fast=fast)
     )
-    service = CarouselService(config, catalog, source_registry, display)
+    telemetry = create_telemetry()
+    try:
+        service = CarouselService(config, catalog, source_registry, display, telemetry=telemetry)
 
-    def stop_service(signum: int, frame: object) -> None:
-        service.stop()
+        def stop_service(signum: int, frame: object) -> None:
+            service.stop()
 
-    signal.signal(signal.SIGTERM, stop_service)
-    signal.signal(signal.SIGINT, stop_service)
-    service.run()
+        signal.signal(signal.SIGTERM, stop_service)
+        signal.signal(signal.SIGINT, stop_service)
+        service.run()
+    finally:
+        if telemetry:
+            telemetry.shutdown()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -296,7 +302,14 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(state, indent=2))
             return 0
         if args.command == "refresh":
-            refresh_due_sources(source_registry, catalog, now, force=args.force)
+            telemetry = create_telemetry()
+            try:
+                refresh_due_sources(
+                    source_registry, catalog, now, force=args.force, telemetry=telemetry
+                )
+            finally:
+                if telemetry:
+                    telemetry.shutdown()
             return 0
         if args.command == "sources":
             if args.source_command == "list":

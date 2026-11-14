@@ -9,6 +9,7 @@ from epaper_display.config import AppConfig
 from epaper_display.display import Display, show_slide
 from epaper_display.refresh_worker import refresh_due_sources
 from epaper_display.source_registry import ApiSourceRegistry
+from epaper_display.telemetry import Telemetry
 
 
 logger = logging.getLogger(__name__)
@@ -22,12 +23,14 @@ class CarouselService:
         source_registry: ApiSourceRegistry,
         display: Display,
         poll_seconds: float = 1,
+        telemetry: Telemetry | None = None,
     ):
         self.config = config
         self.catalog = catalog
         self.source_registry = source_registry
         self.display = display
         self.poll_seconds = poll_seconds
+        self.telemetry = telemetry
         self._stop = threading.Event()
         self._last_rendered_id: str | None = None
         self._last_rendered_revision: str | None = None
@@ -65,6 +68,7 @@ class CarouselService:
             and timestamp < self._retry_after
         ):
             return
+        started = time.monotonic()
         try:
             show_slide(
                 self.display,
@@ -73,11 +77,15 @@ class CarouselService:
                 self.config.portrait_rotation_degrees,
             )
         except Exception:
+            if self.telemetry:
+                self.telemetry.display_refresh(False, time.monotonic() - started)
             self._failed_slide_id = slide.id
             self._failed_slide_revision = revision
             self._retry_after = timestamp + 30
             logger.exception("Could not display slide %s", slide.id)
             return
+        if self.telemetry:
+            self.telemetry.display_refresh(True, time.monotonic() - started)
         self._last_rendered_id = slide.id
         self._last_rendered_revision = revision
         self._failed_slide_id = None
@@ -87,17 +95,24 @@ class CarouselService:
 
     def _refresh_loop(self) -> None:
         while not self._stop.is_set():
-            refresh_due_sources(self.source_registry, self.catalog)
+            refresh_due_sources(self.source_registry, self.catalog, telemetry=self.telemetry)
             self._stop.wait(self.config.refresh_poll_seconds)
 
     def run(self) -> None:
         self.catalog.initialize_carousel(time.time(), self.config.interval_seconds)
-        threading.Thread(
+        worker = threading.Thread(
             target=self._refresh_loop,
             name="feed-refresh",
             daemon=True,
-        ).start()
+        )
+        worker.start()
         logger.info("Carousel service started")
-        while not self._stop.is_set():
-            self.tick()
-            self._stop.wait(self.poll_seconds)
+        try:
+            while not self._stop.is_set():
+                self.tick()
+                self._stop.wait(self.poll_seconds)
+        finally:
+            self._stop.set()
+            worker.join(timeout=5)
+            if worker.is_alive():
+                logger.warning("Source refresh worker did not stop within 5 seconds")
