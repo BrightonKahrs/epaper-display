@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import filecmp
 import os
 import shutil
 import sqlite3
@@ -147,6 +148,11 @@ class Catalog:
                     created_at = old["created_at"]
                     expires_at = old["expires_at"]
                 old_filename = old["filename"] if old else None
+                image_changed = old is not None and (
+                    old_filename != filename
+                    or not destination.exists()
+                    or not filecmp.cmp(temporary_path, destination, shallow=False)
+                )
                 if destination.exists():
                     descriptor, backup_name = tempfile.mkstemp(
                         prefix=f".{slide_id}-backup-", dir=self.gallery_dir
@@ -184,7 +190,7 @@ class Catalog:
                     ),
                 )
                 enabled = bool(old["enabled"]) if old else True
-                if replace_local:
+                if image_changed:
                     connection.execute(
                         """
                         INSERT INTO state(key, value) VALUES (?, '1')

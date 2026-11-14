@@ -5,7 +5,7 @@ Impression Spectra 13.3-inch display.
 
 The project turns a collection of images into an independently running display.
 Slides are stored locally on the microSD card, so playback does not depend on
-an internet connection. Optional JSON API sources refresh content in the
+an internet connection. Optional JSON feeds and direct-image URLs refresh content in the
 background without interrupting the carousel.
 
 ## What it does

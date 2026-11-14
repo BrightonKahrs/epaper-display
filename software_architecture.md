@@ -19,7 +19,7 @@ flowchart LR
     direction TB
     SSH[SSH client]
     CLI["SSH CLI<br/>cli.py"]
-    APIs[External JSON APIs]
+    APIs["External JSON feeds and image endpoints"]
     APIClient["External API adapter<br/>api_client.py"]
     SSH --> CLI
     APIs <--> APIClient
@@ -69,16 +69,16 @@ flowchart LR
   not implement persistence itself.
 - **External API adapter (`api_client.py`)** issues bounded HTTP requests, applies
   configured query parameters and response-field mappings, reads credentials
-  from environment variables, downloads referenced images, and imports them
+  from environment variables, downloads direct or JSON-referenced images, and imports them
   into the catalog. It does not own the refresh schedule or carousel state.
-- **External JSON APIs** are slide providers, not runtime dependencies of
+- **External JSON feeds and image endpoints** are slide providers, not runtime dependencies of
   slide playback. An API outage leaves the already downloaded gallery
   available.
 
 ### Application services
 
 - **API source registry (`source_registry.py`)** owns source specifications:
-  endpoint URL, query parameters, enabled state, TTL, timeout, response
+  endpoint URL, source type (`json` or `image`), query parameters, enabled state, TTL, timeout, response
   mappings, and the name of an optional token environment variable. It also
   owns each source's last-success time, next-refresh deadline, failure count,
   and latest error.
@@ -135,10 +135,22 @@ source to be fetched immediately.
 ## Slide and source contracts
 
 A slide is a local image plus metadata, rather than a live API response or web
-page. Each API item needs a stable identifier and an image URL; a title and
+page. For a JSON feed, each API item needs a stable identifier and an image URL; a title and
 timezone-qualified ISO-8601 expiration are optional. The source ID and item ID
 together identify the catalog item, so later refreshes update it rather than
 creating a duplicate.
+
+Direct-image sources return image bytes instead of JSON. One slide is stored
+per source, with the source ID as its title and a fixed external ID of `image`.
+The URL may change without creating another entry. Direct sources share the
+same query parameters, optional bearer authentication, timeout, size limits,
+TTL scheduling, and failure backoff as JSON feeds. No JSON mappings are applied.
+Invalid image responses leave the previous cached slide intact.
+
+Source specifications persist their type; older databases are migrated with
+`json` as the default. Existing slide enabled states survive refreshes. Changes
+to stored image bytes increment a slide revision so the service redraws an
+updated current slide without waiting for rotation.
 
 API source specifications can be managed over SSH; see
 [CLI instructions](cli_instructions.md#manage-api-sources) for commands.

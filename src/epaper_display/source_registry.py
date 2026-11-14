@@ -23,8 +23,11 @@ class ApiSource:
     expires_at_key: str = "expires_at"
     timeout_seconds: int = 20
     enabled: bool = True
+    source_type: str = "json"
 
     def validate(self) -> None:
+        if self.source_type not in ("json", "image"):
+            raise ValueError("Source type must be 'json' or 'image'.")
         if not isinstance(self.id, str) or not self.id.strip():
             raise ValueError("Source id must be a non-empty string.")
         if not isinstance(self.url, str):
@@ -98,6 +101,14 @@ class ApiSourceRegistry:
                 );
                 """
             )
+            connection.execute("BEGIN IMMEDIATE")
+            columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(source_specs)")
+            }
+            if "source_type" not in columns:
+                connection.execute(
+                    "ALTER TABLE source_specs ADD COLUMN source_type TEXT NOT NULL DEFAULT 'json'"
+                )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -128,6 +139,7 @@ class ApiSourceRegistry:
             expires_at_key=row["expires_at_key"],
             timeout_seconds=row["timeout_seconds"],
             enabled=bool(row["enabled"]),
+            source_type=row["source_type"],
         )
 
     def save(self, source: ApiSource) -> None:
@@ -138,8 +150,8 @@ class ApiSourceRegistry:
                 INSERT INTO source_specs (
                     id, url, ttl_seconds, query_params_json, token_env, slides_key,
                     id_key, title_key, image_url_key, expires_at_key, timeout_seconds,
-                    enabled
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    enabled, source_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     url = excluded.url,
                     ttl_seconds = excluded.ttl_seconds,
@@ -152,6 +164,7 @@ class ApiSourceRegistry:
                     expires_at_key = excluded.expires_at_key,
                     timeout_seconds = excluded.timeout_seconds,
                     enabled = excluded.enabled,
+                    source_type = excluded.source_type,
                     updated_at = unixepoch()
                 """,
                 (
@@ -167,6 +180,7 @@ class ApiSourceRegistry:
                     source.expires_at_key,
                     source.timeout_seconds,
                     int(source.enabled),
+                    source.source_type,
                 ),
             )
             connection.execute(

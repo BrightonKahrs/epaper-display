@@ -81,6 +81,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     configure.add_argument("source_id")
     configure.add_argument("url")
+    configure.add_argument(
+        "--type", dest="source_type", choices=("json", "image"), default="json",
+        help="Source response format (default: json). Use image for a direct image URL.",
+    )
     configure.add_argument("--ttl-seconds", type=int, default=3600)
     configure.add_argument("--query-param", action="append", default=[], metavar="KEY=VALUE")
     configure.add_argument("--token-env")
@@ -288,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
                             {
                                 "id": source.id,
                                 "url": source.url,
+                                "type": source.source_type,
                                 "enabled": source.enabled,
                                 "ttl_seconds": source.ttl_seconds,
                                 "query_params": source.query_params,
@@ -319,6 +324,7 @@ def main(argv: list[str] | None = None) -> int:
                     ApiSource(
                         id=args.source_id,
                         url=args.url,
+                        source_type=args.source_type,
                         ttl_seconds=args.ttl_seconds,
                         query_params=query_params,
                         token_env=args.token_env,

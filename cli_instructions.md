@@ -200,6 +200,39 @@ described above instead.
 Source specifications and refresh TTL state live in `api-specs.sqlite3`,
 separate from slide metadata and carousel state in `catalog.sqlite3`.
 
+### Direct image URLs
+
+Use `--type image` for an endpoint that returns an image directly, with no JSON
+wrapper. For example, to test with a 1200 x 1600 PNG:
+
+```sh
+epaper-display sources configure image-test \
+  'https://placehold.co/1200x1600/png?text=E-paper+API+test' \
+  --type image --ttl-seconds 3600
+epaper-display refresh --force
+epaper-display pick
+```
+
+The source ID becomes the slide title. Each successful refresh updates the same
+slide, even if the URL or query parameters change. If the selected image changes,
+the running service redraws it; unchanged image bytes do not trigger a redraw.
+Failed downloads or invalid images retain the cached slide and report an error
+in `status`, with the same retry backoff used for JSON feeds.
+
+Direct sources support `--query-param`, `--token-env`, `--timeout-seconds`,
+TTL, and source enable/disable. They accept PNG, JPEG, WebP, BMP, GIF, and TIFF
+images supported by the gallery, not SVG or HTML pages. Images need not match
+the panel dimensions; the renderer fits them. JSON mapping options do not apply.
+
+For QuickChart, specify `width=1200`, `height=1600`, `devicePixelRatio=1`,
+`format=png`, and your chart configuration in the URL or query parameters.
+Only send data you intend to share with the external image provider.
+
+### JSON feeds
+
+The default is `--type json`, preserving existing sources. Use it when an
+endpoint returns a list of slide IDs and image URLs:
+
 ```sh
 epaper-display sources configure weather https://example.com/api/slides \
   --ttl-seconds 3600 \
@@ -225,6 +258,14 @@ source specification, preserving an existing source's enabled state. Repeat
 dot-separated paths. `refresh` fetches due sources; `--force` refreshes all
 enabled sources regardless of TTL.
 
+`sources list` includes each source's `type`. Existing databases are upgraded
+automatically, with older sources treated as JSON feeds. When reconfiguring an
+image source, include `--type image` again; omitting it selects JSON mode.
+If you change a source between JSON and image modes, previously imported slides
+are retained and can be individually disabled if no longer needed.
+
+### Source state and authentication
+
 Source enable/disable controls future refreshes, not playback of already imported
 slides. Removing a source removes its specification, not its imported images.
 Use individual slide enable/disable to control playback.
@@ -244,7 +285,7 @@ its environment file. That file is not automatically loaded by separate CLI
 processes; a manual authenticated refresh needs the token in its own process
 environment too. Only the variable's name is persisted in SQLite.
 
-See [architecture](architecture.md) for the API response contract and storage
+See [software architecture](software_architecture.md) for the API response contract and storage
 boundaries.
 
 ## Update an existing installation

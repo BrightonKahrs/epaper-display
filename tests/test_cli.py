@@ -15,6 +15,7 @@ from prompt_toolkit.output import DummyOutput
 from epaper_display.catalog import Catalog
 from epaper_display.cli import _run_service, main
 from epaper_display.config import AppConfig
+from epaper_display.source_registry import ApiSourceRegistry
 
 
 class CliTests(unittest.TestCase):
@@ -159,6 +160,29 @@ class PickerTests(unittest.TestCase):
         self.assertIn(f"Replaced {slide.id}: Original", output.getvalue())
         self.assertIn(f"Deleted {slide.id}", output.getvalue())
         self.assertEqual(self.catalog.list_slides(), [])
+
+    def test_configure_and_list_direct_image_source(self) -> None:
+        arguments = [
+            "--config", str(self.config), "sources", "configure",
+            "chart", "https://example.test/chart", "--type", "image",
+            "--query-param", "width=1200", "--ttl-seconds", "900",
+        ]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(arguments), 0)
+            self.assertEqual(
+                main(["--config", str(self.config), "sources", "disable", "chart"]), 0
+            )
+            self.assertEqual(main(arguments), 0)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["--config", str(self.config), "sources", "list"]), 0)
+        listed = json.loads(output.getvalue())[0]
+        self.assertEqual(listed["type"], "image")
+        self.assertEqual(listed["query_params"], {"width": "1200"})
+        self.assertEqual(listed["ttl_seconds"], 900)
+        self.assertFalse(listed["enabled"])
+        registry = ApiSourceRegistry(self.root / "state" / "api-specs.sqlite3")
+        self.assertEqual(registry.get("chart").source_type, "image")
 
     def test_enable_disable_by_id_and_list_all(self) -> None:
         slide = self.catalog.add_image(self.image, "Local")

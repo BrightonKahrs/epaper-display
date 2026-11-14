@@ -35,14 +35,9 @@ def _request_url(source: ApiSource) -> str:
     return urlunparse(parsed._replace(query=urlencode(query)))
 
 
-def _read_source(source: ApiSource) -> list[dict[str, Any]]:
+def _read_source(source: ApiSource, token: str | None) -> list[dict[str, Any]]:
     headers = {"Accept": "application/json", "User-Agent": "epaper-display/0.1"}
-    if source.token_env:
-        token = os.environ.get(source.token_env)
-        if not token:
-            raise ValueError(
-                f"Source {source.id!r} requires environment variable {source.token_env}."
-            )
+    if token:
         headers["Authorization"] = f"Bearer {token}"
     request = Request(_request_url(source), headers=headers)
     with urlopen(request, timeout=source.timeout_seconds) as response:
@@ -110,6 +105,26 @@ def _download_image(
     return path
 
 
+def _import_image(
+    source: ApiSource,
+    catalog: Catalog,
+    url: str,
+    external_id: str,
+    title: str,
+    expires_at: float | None,
+    now: float,
+    token: str | None,
+) -> None:
+    image_path = _download_image(url, catalog, source.timeout_seconds, token)
+    try:
+        catalog.add_image(
+            image_path, title, source=f"api:{source.id}",
+            external_id=external_id, expires_at=expires_at, now=now,
+        )
+    finally:
+        image_path.unlink(missing_ok=True)
+
+
 def refresh_source(
     source: ApiSource,
     catalog: Catalog,
@@ -117,8 +132,19 @@ def refresh_source(
     now: float | None = None,
 ) -> int:
     timestamp = now if now is not None else time.time()
-    entries = _read_source(source)
+    source.validate()
     token = os.environ.get(source.token_env) if source.token_env else None
+    if source.token_env and not token:
+        raise ValueError(
+            f"Source {source.id!r} requires environment variable {source.token_env}."
+        )
+    if source.source_type == "image":
+        _import_image(
+            source, catalog, _request_url(source), "image", source.id, None, timestamp, token
+        )
+        source_registry.record_success(source.id, timestamp, source.ttl_seconds)
+        return 1
+    entries = _read_source(source, token)
     imported = 0
     for entry in entries:
         external_id = _mapped_value(entry, source.id_key)
@@ -143,20 +169,10 @@ def refresh_source(
         )
         resolved_image_url = urljoin(source.url, image_url)
         image_token = token if _same_origin(source.url, resolved_image_url) else None
-        image_path = _download_image(
-            resolved_image_url, catalog, source.timeout_seconds, image_token
+        _import_image(
+            source, catalog, resolved_image_url, str(external_id),
+            title or str(external_id), _parse_expiration(expiration), timestamp, image_token,
         )
-        try:
-            catalog.add_image(
-                image_path,
-                title or str(external_id),
-                source=f"api:{source.id}",
-                external_id=str(external_id),
-                expires_at=_parse_expiration(expiration),
-                now=timestamp,
-            )
-        finally:
-            image_path.unlink(missing_ok=True)
         imported += 1
     source_registry.record_success(source.id, timestamp, source.ttl_seconds)
     return imported
