@@ -177,6 +177,21 @@ class PickerTests(unittest.TestCase):
             self.assertEqual(main(["--config", str(self.config), "disable", "missing"]), 2)
         self.assertIn("Slide not found", stderr.getvalue())
 
+    def test_pause_resume_commands_report_persisted_status(self) -> None:
+        slide = self.catalog.add_image(self.image)
+        self.catalog.select_slide(slide.id, now=100, interval_seconds=1800)
+        for command, expected_paused in (("pause", True), ("resume", False)):
+            with self.subTest(command=command):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(main(["--config", str(self.config), command]), 0)
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(main(["--config", str(self.config), "status"]), 0)
+                status = json.loads(output.getvalue())
+                self.assertEqual(status["rotation_paused"], expected_paused)
+                self.assertEqual(status["current_slide_id"], slide.id)
+                self.assertEqual(status["next_transition_at"] is None, expected_paused)
+
     def test_enable_disable_picker_filters_and_supports_cancellation(self) -> None:
         first = self.catalog.add_image(self.image, "First", now=10)
         second = self.catalog.add_image(

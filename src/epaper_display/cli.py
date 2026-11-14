@@ -53,6 +53,8 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("next", help="Advance to the next slide.")
     commands.add_parser("previous", help="Select the previous slide.")
     commands.add_parser("status", help="Show carousel and API source status.")
+    commands.add_parser("pause", help="Pause automatic slide rotation.")
+    commands.add_parser("resume", help="Resume automatic rotation with a fresh interval.")
 
     run = commands.add_parser("run", help="Run the carousel and API refresh worker.")
     display_options = run.add_mutually_exclusive_group()
@@ -254,6 +256,14 @@ def main(argv: list[str] | None = None) -> int:
             slide = catalog.advance(-1, now, config.interval_seconds)
             print(f"Selected {slide.id}: {slide.title}")
             return 0
+        if args.command in ("pause", "resume"):
+            catalog.set_paused(args.command == "pause", now, config.interval_seconds)
+            print(
+                "Automatic rotation paused. Manual slide controls remain available."
+                if args.command == "pause"
+                else "Automatic rotation resumed with a fresh interval."
+            )
+            return 0
         if args.command == "status":
             state = {
                 "data_dir": str(config.data_dir),
@@ -261,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
                 "image_metadata_database": str(config.image_metadata_database_path),
                 "slide_count": len(catalog.list_slides(now)),
                 "current_slide_id": catalog.get_state("current_slide_id"),
+                "rotation_paused": catalog.get_state("rotation_paused") == "1",
                 "next_transition_at": _timestamp(catalog.get_state("next_transition_at")),
                 "api_sources": source_registry.refresh_status(),
             }

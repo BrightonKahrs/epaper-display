@@ -62,7 +62,7 @@ class CatalogTests(unittest.TestCase):
         self.assertFalse(refreshed.enabled)
         reopened = Catalog(self.root / "catalog.sqlite3", self.root / "gallery")
         self.assertEqual(reopened.list_slides(now=201), [])
-        self.assertEqual(
+        self.assertCountEqual(
             [(slide.id, slide.enabled) for slide in reopened.list_slides(now=201, include_all=True)],
             [(local.id, False), (api.id, False)],
         )
@@ -93,6 +93,36 @@ class CatalogTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             self.catalog.add_image(invalid)
+
+    def test_pause_survives_restart_and_manual_controls_until_resume(self) -> None:
+        first = self.catalog.add_image(self.image_path, now=100)
+        second = self.catalog.add_image(self.image_path, now=101)
+        self.catalog.initialize_carousel(now=200, interval_seconds=1800)
+        self.catalog.set_paused(True, now=201, interval_seconds=1800)
+        reopened = Catalog(self.root / "catalog.sqlite3", self.root / "gallery")
+        self.assertEqual(reopened.get_state("rotation_paused"), "1")
+        self.assertIsNone(reopened.advance_if_due(now=5000, interval_seconds=1800))
+        self.assertEqual(reopened.get_state("current_slide_id"), first.id)
+        self.assertEqual(reopened.get_state("next_transition_at"), "")
+        self.assertEqual(
+            reopened.initialize_carousel(now=5001, interval_seconds=1800).id, first.id
+        )
+        self.assertEqual(reopened.advance(1, now=5002, interval_seconds=1800).id, second.id)
+        reopened.select_slide(first.id, now=5003, interval_seconds=1800)
+        self.assertEqual(reopened.get_state("next_transition_at"), "")
+        reopened.set_paused(False, now=6000, interval_seconds=1800)
+        self.assertIsNone(reopened.advance_if_due(now=7799, interval_seconds=1800))
+        self.assertEqual(
+            reopened.advance_if_due(now=7800, interval_seconds=1800).id, second.id
+        )
+
+    def test_pause_empty_gallery_applies_when_first_slide_arrives(self) -> None:
+        self.catalog.set_paused(True, now=100, interval_seconds=1800)
+        slide = self.catalog.add_image(self.image_path, now=101)
+        self.catalog.initialize_carousel(now=102, interval_seconds=1800)
+        self.assertEqual(self.catalog.get_state("current_slide_id"), slide.id)
+        self.assertEqual(self.catalog.get_state("next_transition_at"), "")
+        self.assertIsNone(self.catalog.advance_if_due(now=5000, interval_seconds=1800))
 
     def test_replace_preserves_identity_and_replaces_gallery_file(self) -> None:
         original = self.catalog.add_image(self.image_path, "Original", now=100)

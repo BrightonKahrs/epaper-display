@@ -147,6 +147,25 @@ The `pick`, `show`, `next`, and `previous` commands persist the selection. The
 running service draws it on its next poll; if the service is stopped, it
 displays that selection when it starts.
 
+### Pause automatic rotation
+
+```sh
+epaper-display pause
+epaper-display resume
+epaper-display status
+```
+
+`pause` stops timed rotation without stopping the service or API refreshes.
+Manual `pick`, `show`, `next`, and `previous` commands still work. The paused
+state survives service restarts and reboots; `status` reports `rotation_paused`
+and no next transition while paused. `resume` starts a fresh full interval
+(30 minutes by default), rather than immediately catching up on missed changes.
+Use the same user and data directory as the running carousel.
+
+Pausing does not cancel a panel refresh already in progress. Replacing the
+current image still updates it; deleting, disabling, or expiring the current
+slide still makes the service select another available slide.
+
 ## API sources
 
 API source specifications and refresh TTL state live in a separate

@@ -342,12 +342,29 @@ class Catalog:
             row = connection.execute("SELECT value FROM state WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else None
 
+    def set_paused(self, paused: bool, now: float, interval_seconds: int) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO state(key, value) VALUES ('rotation_paused', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                ("1" if paused else "0",),
+            )
+            current_id = self._state_value(connection, "current_slide_id")
+            self._write_carousel_state(
+                connection, current_id, now + interval_seconds if current_id else None
+            )
+
     def _write_carousel_state(
         self,
         connection: sqlite3.Connection,
         slide_id: str | None,
         next_transition_at: float | None,
     ) -> None:
+        if self._state_value(connection, "rotation_paused") == "1":
+            next_transition_at = None
         values = {
             "current_slide_id": slide_id or "",
             "next_transition_at": (
@@ -410,6 +427,8 @@ class Catalog:
     def advance_if_due(self, now: float, interval_seconds: int) -> Slide | None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if self._state_value(connection, "rotation_paused") == "1":
+                return None
             next_transition = self._state_value(connection, "next_transition_at")
             if not next_transition or float(next_transition) > now:
                 return None
