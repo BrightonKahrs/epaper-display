@@ -1,5 +1,9 @@
 # Software architecture
 
+See [first-time setup](first_time_setup.md) for installation,
+[CLI instructions](cli_instructions.md) for commands, or the
+[project overview](README.md).
+
 The board is one Python project, organized as modules and run as one systemd
 service. SSH commands are short-lived CLI invocations; the carousel scheduler
 and TTL refresh worker run independently in the service process. A slide
@@ -110,8 +114,9 @@ microSD card:
 - `api-specs.sqlite3` stores API source specifications and their refresh/TTL
   state. The secret token itself is never stored in SQLite; only its
   environment-variable name is.
-- `catalog.sqlite3` stores slide/image metadata, carousel selection, and the
-  next slide transition deadline. It does not store API source configuration
+- `catalog.sqlite3` stores slide/image metadata, per-slide enabled state,
+  carousel selection, rotation pause state, and the next slide transition
+  deadline. It does not store API source configuration
   or refresh state.
 - `gallery/` stores the downloaded or SSH-uploaded image files referenced by
   the catalog.
@@ -121,6 +126,9 @@ deadline are persisted. On startup, the selected eligible slide is restored,
 or an expired or missing selection is replaced with the first eligible slide.
 The selection receives a fresh interval, so the service does not replay
 transitions missed while powered off.
+While paused, timed transitions are suppressed and no transition deadline is
+scheduled; manual selection and API refreshes remain available. Resuming starts
+a fresh interval.
 Source TTL deadlines persist separately, so a restart does not cause every
 source to be fetched immediately.
 
@@ -132,21 +140,8 @@ timezone-qualified ISO-8601 expiration are optional. The source ID and item ID
 together identify the catalog item, so later refreshes update it rather than
 creating a duplicate.
 
-API source specifications can be managed over SSH:
-
-```sh
-epaper-display sources configure weather https://example.com/api/slides \
-  --ttl-seconds 3600 \
-  --query-param city=Philadelphia \
-  --token-env WEATHER_TOKEN \
-  --slides-key data.slides \
-  --id-key id \
-  --title-key title \
-  --image-url-key image_url \
-  --expires-at-key expires_at
-epaper-display sources list
-epaper-display refresh
-```
+API source specifications can be managed over SSH; see
+[CLI instructions](cli_instructions.md#manage-api-sources) for commands.
 
 Field mappings support dot-separated paths in JSON objects. Query parameters
 are persisted with the source. When `token_env` is configured, its value is
