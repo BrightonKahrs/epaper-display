@@ -56,21 +56,26 @@ epaper-display list --all
 Only one process should use the physical panel at a time; stop the systemd
 service before starting a foreground hardware process.
 
-`list` shows enabled, non-expired slides with their IDs, titles, and sources.
+`list` shows enabled, non-expired slides with their IDs, titles, sources, and
+logical folder paths (`/` means no folder).
 `list --all` also includes disabled and expired entries and labels their state.
-`status` reports the active slide count, selected slide, pause state, next
-transition, storage paths, and API refresh status.
+`list --scoped` limits either listing to the current playback scope.
+`status` reports the total and scoped active slide counts, scope, selected slide,
+pause state, next transition, storage paths, and API refresh status.
 
 ## Add images
 
 ```sh
 epaper-display add /tmp/my-slide.png
 epaper-display add /tmp/first.png /tmp/second.png
+epd add /tmp/jupiter.png --folder space/planets
 ```
 
 Each import copies the image into the persistent gallery and prints its ID and
 title. The temporary upload is no longer needed after a successful import.
 Adding the same file again creates another entry; use `replace` to update one.
+`--folder` is optional and applies to every image in that import. Without it,
+new slides have no folder, regardless of the current playback scope.
 
 For the default portrait setup, create PNG artwork at **1200 x 1600 pixels**.
 Other sizes are fitted onto a white canvas without stretching. The renderer
@@ -104,6 +109,74 @@ Selections persist in SQLite. The running carousel displays the selection on
 its next poll, after any panel refresh already in progress finishes. If stopped,
 the carousel restores the selected eligible slide when it starts.
 
+## Organize folders and scope playback
+
+Folders are logical metadata, not directories on disk. A slide belongs to one
+folder or to the unfiled root (`/`). Paths use `/`, can have any depth, and are
+case-sensitive. Folder names may contain spaces when quoted. Parent folders
+are inferred automatically; no separate folder-creation command is needed.
+Existing galleries are upgraded automatically with all slides initially unfiled.
+
+```sh
+epd add /tmp/jupiter.png --folder space/planets
+epd add /tmp/moon.png --folder space/planets/moons
+epd move <slide-id> --folder space/planets
+epd move --pick --folder "travel/summer photos"
+epd move --pick --root
+```
+
+`move` changes only folder membership: the ID, image file, title, enabled
+state, and import order stay intact. The move picker includes all local and
+API slides, including disabled or expired ones, even outside the playback scope.
+Folder membership survives image replacement and API refreshes. Moving the
+last slide out of a folder removes that otherwise empty folder from the picker.
+
+```sh
+epd scope --pick
+epd scope space
+epd scope space/planets
+epd scope --all
+epd scope
+epd list --scoped
+```
+
+The scope picker offers the whole gallery and every folder, including parents
+whose images exist only in descendants. `scope` without arguments reports the
+current scope; `scope --all` restores whole-gallery playback.
+Changes affect the running carousel on its next poll; no restart is needed.
+Scope is shared by controls using the same catalog and persists across service
+restarts until changed. It is not a separate scope per SSH terminal.
+
+Within the selected scope, rotation has one turn for **each slide directly in
+that scope**, followed by one turn for **each immediate child folder**. Loose
+slides follow import order; child folders follow alphabetical, case-sensitive
+path order. On each folder turn, the next eligible image is selected from that
+folder **and all its descendants**, in import order. Descendant folders do not
+get additional turns at this level. Each folder's progress is remembered
+separately for each playback scope.
+
+For example, with unfiled slides A and B, an `earth` slide in `space`, and a
+`jupiter` slide in `space/planets`, whole-gallery playback is:
+
+```text
+A -> B -> earth -> A -> B -> jupiter -> A -> B -> earth -> ...
+```
+
+When scoped to `space`, `earth` is a direct slide and `planets` is a child-folder
+turn. If scoped to a leaf folder with no child folders, playback is simply its
+slides in import order. `next` uses this same rotation; `previous` steps through
+the groups and their image cursors in reverse, rather than undoing display history.
+Manual `display` selections and its picker are restricted to active slides in
+the current scope; change scope first to display an image elsewhere.
+
+Disabled, expired, or deleted slides never participate, and child folders with
+no eligible descendants get no turn. A scope with no eligible slides stays empty
+rather than falling back to images outside it; the physical panel retains its
+last image. New eligible slides in the scope are picked up automatically.
+Scope changes and moving a current slide out of scope can select a replacement
+even while timed rotation is paused, just like disabling a current slide.
+The scope picker can show folders containing only disabled/expired slides.
+
 ## Replace or delete slides
 
 ```sh
@@ -114,7 +187,7 @@ epaper-display delete --pick
 ```
 
 These commands apply only to local slides. Replacement keeps the ID, title,
-position, and enabled state. The running carousel redraws a replaced current
+position, folder, and enabled state. The running carousel redraws a replaced current
 slide. Deletion permanently removes the entry and its gallery image.
 
 Provide either a slide ID or `--pick`, never both. The old positional `pick`

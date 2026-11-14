@@ -428,11 +428,140 @@ class PickerTests(unittest.TestCase):
         self.assertIn("Slide not found or expired", stderr)
         self.assertIsNone(self.catalog.get_state("current_slide_id"))
 
+    def test_import_move_scope_list_and_status_commands(self) -> None:
+        prefix = ["--config", str(self.config)]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main([*prefix, "add", str(self.image), "--folder", "space/planets"]), 0)
+            self.assertEqual(main([*prefix, "add", str(self.image)]), 0)
+        inside, outside = self.catalog.list_slides()
+        self.assertEqual(inside.folder, "space/planets")
+        self.assertIsNone(outside.folder)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main([*prefix, "scope", "space"]), 0)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main([*prefix, "list", "--scoped"]), 0)
+        self.assertIn("space/planets", output.getvalue())
+        self.assertNotIn(outside.id, output.getvalue())
+        status = io.StringIO()
+        with contextlib.redirect_stdout(status):
+            self.assertEqual(main([*prefix, "status"]), 0)
+        self.assertEqual(
+            {key: json.loads(status.getvalue())[key]
+             for key in ("scope", "slide_count", "scoped_slide_count")},
+            {"scope": "space", "slide_count": 2, "scoped_slide_count": 1},
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main([*prefix, "move", outside.id, "--folder", "space/photos"]), 0)
+            self.assertEqual(main([*prefix, "move", inside.id, "--root"]), 0)
+            self.assertEqual(main([*prefix, "scope", "--all"]), 0)
+        self.assertIsNone(self.catalog.get_scope())
+        self.assertCountEqual(
+            [(slide.id, slide.folder) for slide in self.catalog.list_slides()],
+            [(inside.id, None), (outside.id, "space/photos")],
+        )
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main([*prefix, "scope"]), 0)
+        self.assertIn("Playback scope: /", output.getvalue())
+
+    def test_scope_picker_supports_ancestors_root_and_cancellation(self) -> None:
+        self.catalog.add_image(self.image, folder="space/planets/moons")
+        prefix = ["--config", str(self.config)]
+        real_select = questionary.select
+        with create_pipe_input() as keyboard:
+            keyboard.send_text("\x1b[B\x1b[B\r")
+
+            def select(*args, **kwargs):
+                return real_select(*args, **kwargs, input=keyboard, output=DummyOutput())
+
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                patch("sys.stdin.isatty", return_value=True),
+                patch("sys.stdout.isatty", return_value=True),
+                patch("epaper_display.cli.questionary.select", side_effect=select) as menu,
+            ):
+                self.assertEqual(main([*prefix, "scope", "--pick"]), 0)
+        self.assertEqual(self.catalog.get_scope(), "space/planets")
+        self.assertEqual(
+            [choice.value for choice in menu.call_args.kwargs["choices"]],
+            ["/", "space", "space/planets", "space/planets/moons"],
+        )
+        before = self.catalog.get_state("next_transition_at")
+        for outcome in (None, EOFError()):
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                patch("sys.stdin.isatty", return_value=True),
+                patch("sys.stdout.isatty", return_value=True),
+                patch("epaper_display.cli.questionary.select") as menu,
+            ):
+                if isinstance(outcome, EOFError):
+                    menu.return_value.ask.side_effect = outcome
+                else:
+                    menu.return_value.ask.return_value = outcome
+                self.assertEqual(main([*prefix, "scope", "--pick"]), 0)
+                self.assertEqual(menu.call_args.kwargs["default"], "space/planets")
+                self.assertEqual(self.catalog.get_scope(), "space/planets")
+                self.assertEqual(self.catalog.get_state("next_transition_at"), before)
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
+            patch("epaper_display.cli.questionary.select") as menu,
+        ):
+            menu.return_value.ask.return_value = "/"
+            self.assertEqual(main([*prefix, "scope", "--pick"]), 0)
+        self.assertIsNone(self.catalog.get_scope())
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error), patch("sys.stdin.isatty", return_value=False):
+            self.assertEqual(main([*prefix, "scope", "--pick"]), 2)
+        self.assertIn("ssh -t", error.getvalue())
+
+    def test_display_picker_respects_scope_but_move_picker_includes_all_slides(self) -> None:
+        outside = self.catalog.add_image(self.image, "Outside", now=10)
+        inside = self.catalog.add_image(self.image, "Inside", folder="space", now=11)
+        api = self.catalog.add_image(
+            self.image, "Disabled API", source="api:weather", external_id="today",
+            expires_at=50, now=12,
+        )
+        self.catalog.set_enabled(api.id, False)
+        self.catalog.set_scope("space", 100, 1800)
+        prefix = ["--config", str(self.config)]
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
+            patch("epaper_display.cli.questionary.select") as menu,
+        ):
+            menu.return_value.ask.return_value = None
+            self.assertEqual(main([*prefix, "display", "--pick"]), 0)
+            self.assertEqual([c.value for c in menu.call_args.kwargs["choices"]], [inside.id])
+            self.assertEqual(main([*prefix, "move", "--pick", "--folder", "art/photos"]), 0)
+            self.assertEqual(
+                [c.value for c in menu.call_args.kwargs["choices"]], [outside.id, inside.id, api.id]
+            )
+            self.assertIsNone(self.catalog.list_slides(include_all=True)[2].folder)
+            menu.return_value.ask.return_value = api.id
+            self.assertEqual(main([*prefix, "move", "--pick", "--folder", "art/photos"]), 0)
+        moved = self.catalog.list_slides(include_all=True)[2]
+        self.assertEqual(moved.folder, "art/photos")
+        self.assertFalse(moved.enabled)
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            self.assertEqual(main([*prefix, "display", outside.id]), 2)
+            self.assertEqual(main([*prefix, "scope", "missing"]), 2)
+        self.assertIn("outside the current scope", error.getvalue())
+        self.assertIn("Folder not found", error.getvalue())
+        self.assertEqual(self.catalog.get_scope(), "space")
+
 
 class CommandSyntaxTests(unittest.TestCase):
     def test_management_commands_require_id_or_pick_but_not_both(self) -> None:
-        for command in ("delete", "replace", "enable", "disable", "display"):
-            image = ["new.png"] if command == "replace" else []
+        for command in ("delete", "replace", "enable", "disable", "display", "move"):
+            image = (
+                ["new.png"] if command == "replace"
+                else ["--folder", "space"] if command == "move" else []
+            )
             with self.subTest(command=command):
                 by_id = _parser().parse_args([command, "slide-id", *image])
                 self.assertEqual(by_id.slide_id, "slide-id")
@@ -440,7 +569,7 @@ class CommandSyntaxTests(unittest.TestCase):
                 by_pick = _parser().parse_args([command, "--pick", *image])
                 self.assertIsNone(by_pick.slide_id)
                 self.assertTrue(by_pick.pick)
-                if image:
+                if command == "replace":
                     self.assertEqual(by_pick.image, Path("new.png"))
                 for arguments in (
                     [command, *image],
@@ -466,6 +595,20 @@ class CommandSyntaxTests(unittest.TestCase):
         for executable in ("epd", "epaper-display"):
             with self.subTest(executable=executable), patch("sys.argv", [executable]):
                 self.assertTrue(_parser().format_help().startswith(f"usage: {executable} "))
+
+    def test_scope_and_move_destinations_are_mutually_exclusive(self) -> None:
+        for arguments in (
+            ["scope", "space", "--pick"], ["scope", "--all", "--pick"],
+            ["scope", "space", "--all"], ["move", "slide-id"],
+            ["move", "slide-id", "--folder", "space", "--root"],
+        ):
+            with (
+                self.subTest(arguments=arguments),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as error,
+            ):
+                _parser().parse_args(arguments)
+            self.assertEqual(error.exception.code, 2)
 
 
 class RunOptionsTests(unittest.TestCase):

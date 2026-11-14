@@ -74,7 +74,8 @@ epaper-display display --pick
 
 For custom artwork, start with a 1200 x 1600 portrait PNG.
 [CLI instructions](cli_instructions.md) explain uploading, importing, replacing,
-disabling, deleting, and pausing.
+disabling, deleting, pausing, and organizing slides into folders with scoped
+playback.
 
 ## 4. Understand configuration and storage
 

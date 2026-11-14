@@ -89,7 +89,8 @@ flowchart LR
   worker runs separately from slide rotation so slow network calls do not
   block display updates.
 - **Slide catalog (`catalog.py`)** validates and stores local image files,
-  slide metadata, expiration, and carousel selection/deadline state. It
+  slide metadata, logical folder paths, expiration, playback scope, folder
+  rotation cursors, and carousel selection/deadline state. It
   provides the scheduler with eligible slides without contacting APIs.
 - **Carousel scheduler (`service.py`)** restores the selected slide after
   restart, advances it on the configured interval, and notices manual CLI
@@ -118,6 +119,7 @@ microSD card:
   state. The secret token itself is never stored in SQLite; only its
   environment-variable name is.
 - `catalog.sqlite3` stores slide/image metadata, per-slide enabled state,
+  nullable logical folder membership, playback scope, per-scope folder cursors,
   carousel selection, rotation pause state, and the next slide transition
   deadline. It does not store API source configuration
   or refresh state.
@@ -135,6 +137,32 @@ a fresh interval.
 Source TTL deadlines persist separately, so a restart does not cause every
 source to be fetched immediately.
 
+### Folder-aware playback
+
+Logical folder paths are metadata; image files stay in the flat gallery under
+their stable slide IDs. Paths use case-sensitive `/`-separated segments.
+Parents are inferred from slide membership, including inactive slides. Existing
+catalogs gain a nullable `folder` column automatically: `NULL` means a loose
+root slide, not a folder or a single shared scheduling group.
+
+For each transition, the catalog filters to enabled, unexpired slides in the
+selected folder and every descendant, matching whole path segments. Each slide
+directly in that scope gets its own turn, in import order; each immediate child
+folder gets one turn, in path order. A folder turn cycles through all of its
+eligible descendants in import order, without weighting by deeper hierarchy.
+The chosen image cursor is persisted per `(scope, child folder)` in
+`folder_cursors`. Manual selection also updates that folder's cursor.
+Scopes without child folders use ordinary sequential slide rotation.
+
+The scope and cursor/selection/deadline updates use the same SQLite write
+transactions as carousel controls. CLI scope changes are visible to the running
+service without restart and remain in effect until changed, including across
+reboots. Playback lookups reject out-of-scope slides, so moving a current slide
+outside the scope triggers normal selection recovery. An empty scope never
+falls back to the rest of the gallery; the panel keeps its last image until an
+eligible in-scope slide arrives or scope is changed. API refreshing remains
+independent of playback scope.
+
 ## Slide and source contracts
 
 A slide is a local image plus metadata, rather than a live API response or web
@@ -151,7 +179,8 @@ TTL scheduling, and failure backoff as JSON feeds. No JSON mappings are applied.
 Invalid image responses leave the previous cached slide intact.
 
 Source specifications persist their type; older databases are migrated with
-`json` as the default. Existing slide enabled states survive refreshes. Changes
+`json` as the default. Existing slide enabled states and user-assigned folders
+survive refreshes and replacements. New API slides start unfiled. Changes
 to stored image bytes increment a slide revision so the service redraws an
 updated current slide without waiting for rotation.
 

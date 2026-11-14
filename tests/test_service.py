@@ -12,6 +12,38 @@ from epaper_display.source_registry import ApiSourceRegistry
 
 
 class ServiceTests(unittest.TestCase):
+    def test_running_service_observes_scope_and_folder_moves_even_while_paused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            catalog = Catalog(root / "catalog.sqlite3", root / "gallery")
+            sources = ApiSourceRegistry(root / "api-specs.sqlite3")
+            preview = root / "preview.png"
+            red, blue = root / "red.png", root / "blue.png"
+            Image.new("RGB", (20, 20), "red").save(red)
+            Image.new("RGB", (20, 20), "blue").save(blue)
+            outside = catalog.add_image(red, now=100)
+            inside = catalog.add_image(blue, folder="space/planets/moons", now=101)
+            service = CarouselService(AppConfig(root), catalog, sources, PreviewDisplay(preview))
+            service.tick(now=200)
+            self.assertEqual(catalog.get_state("current_slide_id"), outside.id)
+            control = Catalog(catalog.database_path, catalog.gallery_dir)
+            control.set_paused(True, 201, 1800)
+            control.set_scope("space", 202, 1800)
+            service.tick(now=203)
+            self.assertEqual(catalog.get_state("current_slide_id"), inside.id)
+            with Image.open(preview) as image:
+                self.assertEqual(image.getpixel((800, 600)), (0, 0, 255))
+            control.move_slide(inside.id, None)
+            service.tick(now=204)
+            self.assertFalse(catalog.get_state("current_slide_id"))
+            self.assertEqual(catalog.get_scope(), "space")
+            control.move_slide(outside.id, "space/planets")
+            service.tick(now=205)
+            self.assertEqual(catalog.get_state("current_slide_id"), outside.id)
+            self.assertEqual(catalog.get_state("next_transition_at"), "")
+            with Image.open(preview) as image:
+                self.assertEqual(image.getpixel((800, 600)), (255, 0, 0))
+
     def test_paused_service_holds_slide_and_allows_manual_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

@@ -44,11 +44,23 @@ def _parser() -> argparse.ArgumentParser:
 
     add = commands.add_parser("add", help="Add one or more local image files to the gallery.")
     add.add_argument("images", nargs="+", type=Path)
+    add.add_argument("--folder", help="Logical folder path, such as space/planets (default: root).")
 
     list_command = commands.add_parser("list", help="List active slides.")
     list_command.add_argument(
         "--all", action="store_true", help="Include disabled and expired slides."
     )
+    list_command.add_argument("--scoped", action="store_true", help="Show only the current scope.")
+    move = commands.add_parser("move", help="Move a slide to a logical folder without moving its file.")
+    _add_slide_target(move)
+    destination = move.add_mutually_exclusive_group(required=True)
+    destination.add_argument("--folder", help="Destination folder path; created automatically.")
+    destination.add_argument("--root", action="store_true", help="Remove the slide's folder assignment.")
+    scope = commands.add_parser("scope", help="Show or change the carousel's playback folder.")
+    scope_target = scope.add_mutually_exclusive_group()
+    scope_target.add_argument("folder", nargs="?", help="Folder and descendants to play.")
+    scope_target.add_argument("--pick", action="store_true", help="Choose a folder interactively.")
+    scope_target.add_argument("--all", action="store_true", help="Play the whole gallery.")
     replace = commands.add_parser("replace", help="Replace the image for a local slide.")
     _add_slide_target(replace)
     replace.add_argument("image", type=Path)
@@ -121,9 +133,13 @@ def _make_source_registry(config: AppConfig) -> ApiSourceRegistry:
 
 
 def _pick_slide(
-    catalog: Catalog, now: float, *, local_only: bool = False, enabled: bool | None = None
+    catalog: Catalog, now: float, *, local_only: bool = False,
+    enabled: bool | None = None, management: bool = False,
 ) -> str | None:
-    slides = catalog.list_slides(now, include_all=local_only or enabled is not None)
+    slides = catalog.list_slides(
+        now, include_all=management or local_only or enabled is not None,
+        scoped=not (management or local_only or enabled is not None),
+    )
     if local_only:
         slides = [slide for slide in slides if slide.source == "ssh"]
     if enabled is not None:
@@ -133,7 +149,10 @@ def _pick_slide(
             raise ValueError(f"No {'enabled' if enabled else 'disabled'} slides.")
         if local_only:
             raise ValueError("No available local slides. Add images with 'epaper-display add'.")
-        raise ValueError("No available slides. Add images with 'epaper-display add'.")
+        raise ValueError(
+            "No available slides in the current scope. Add images with 'epaper-display add' "
+            "or change scope with 'epaper-display scope --all'."
+        )
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise ValueError(
             "'pick' requires an interactive terminal. Over SSH, use 'ssh -t', "
@@ -143,6 +162,7 @@ def _pick_slide(
     choices = [
         questionary.Choice(
             f"{slide.title} ({slide.id})"
+            + f" [folder: {slide.folder or '/'}]"
             + (" [disabled]" if not slide.enabled else "")
             + (" [expired]" if slide.expires_at is not None and slide.expires_at <= now else ""),
             value=slide.id,
@@ -155,6 +175,29 @@ def _pick_slide(
             "Choose a slide (arrow keys, Enter to select, Ctrl+C to cancel):",
             choices=choices,
             default=default_id,
+        ).ask(kbi_msg="")
+    except EOFError:
+        return None
+
+
+def _pick_scope(catalog: Catalog) -> str | None:
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise ValueError(
+            "'scope --pick' requires an interactive terminal. Over SSH, use 'ssh -t', "
+            "or use 'epaper-display scope <folder>' or 'scope --all'."
+        )
+    folders = catalog.list_folders()
+    current = catalog.get_scope() or "/"
+    if current != "/" and current not in folders:
+        folders.append(current)
+        folders.sort()
+    choices = [questionary.Choice("/ (whole gallery)", value="/")] + [
+        questionary.Choice(folder, value=folder) for folder in folders
+    ]
+    try:
+        return questionary.select(
+            "Choose a playback scope (includes all descendants):",
+            choices=choices, default=current,
         ).ask(kbi_msg="")
     except EOFError:
         return None
@@ -204,17 +247,39 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "add":
             for image in args.images:
-                slide = catalog.add_image(image)
+                slide = catalog.add_image(image, folder=args.folder)
                 print(f"{slide.id}\t{slide.title}")
             return 0
         if args.command == "list":
-            for slide in catalog.list_slides(now, include_all=args.all):
+            for slide in catalog.list_slides(now, include_all=args.all, scoped=args.scoped):
                 line = f"{slide.id}\t{slide.title}\t{slide.source}"
                 if args.all:
                     line += f"\t{'enabled' if slide.enabled else 'disabled'}"
                     if slide.expires_at is not None and slide.expires_at <= now:
                         line += "\texpired"
+                line += f"\t{slide.folder or '/'}"
                 print(line)
+            return 0
+        if args.command == "move":
+            slide_id = args.slide_id
+            if args.pick:
+                slide_id = _pick_slide(catalog, now, management=True)
+                if slide_id is None:
+                    print("Move cancelled.")
+                    return 0
+            slide = catalog.move_slide(slide_id, args.folder)
+            print(f"Moved {slide.id}: {slide.title} -> {slide.folder or '/'}")
+            return 0
+        if args.command == "scope":
+            folder = args.folder
+            if args.pick:
+                folder = _pick_scope(catalog)
+                if folder is None:
+                    print("Scope selection cancelled.")
+                    return 0
+            if args.all or folder is not None:
+                catalog.set_scope(folder, time.time(), config.interval_seconds)
+            print(f"Playback scope: {catalog.get_scope() or '/'} (includes all descendants)")
             return 0
         if args.command in ("enable", "disable"):
             slide_id = args.slide_id
@@ -294,6 +359,8 @@ def main(argv: list[str] | None = None) -> int:
                 "api_specs_database": str(config.api_specs_database_path),
                 "image_metadata_database": str(config.image_metadata_database_path),
                 "slide_count": len(catalog.list_slides(now)),
+                "scope": catalog.get_scope() or "/",
+                "scoped_slide_count": len(catalog.list_slides(now, scoped=True)),
                 "current_slide_id": catalog.get_state("current_slide_id"),
                 "rotation_paused": catalog.get_state("rotation_paused") == "1",
                 "next_transition_at": _timestamp(catalog.get_state("next_transition_at")),

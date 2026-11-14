@@ -34,6 +34,20 @@ class Slide:
     created_at: float
     expires_at: float | None
     enabled: bool = True
+    folder: str | None = None
+
+
+def normalize_folder(folder: str | None) -> str | None:
+    if folder is None:
+        return None
+    path = folder.strip().replace("\\", "/").strip("/")
+    if not path:
+        return None
+    if any(part in ("", ".", "..") or not part.strip() for part in path.split("/")) or any(
+        ord(character) < 32 or ord(character) == 127 for character in path
+    ):
+        raise ValueError("Folder paths must contain names separated by '/', without '.' or '..'.")
+    return path
 
 
 class Catalog:
@@ -65,8 +79,18 @@ class Catalog:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS folder_cursors (
+                    scope TEXT NOT NULL,
+                    folder TEXT NOT NULL,
+                    slide_id TEXT NOT NULL,
+                    PRIMARY KEY(scope, folder)
+                );
                 """
             )
+            connection.execute("BEGIN IMMEDIATE")
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(slides)")}
+            if "folder" not in columns:
+                connection.execute("ALTER TABLE slides ADD COLUMN folder TEXT")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -91,6 +115,7 @@ class Catalog:
             created_at=row["created_at"],
             expires_at=row["expires_at"],
             enabled=bool(row["enabled"]),
+            folder=row["folder"],
         )
 
     def _active_rows(self, connection: sqlite3.Connection, now: float) -> list[sqlite3.Row]:
@@ -114,6 +139,7 @@ class Catalog:
         created_at: float,
         *,
         replace_local: bool = False,
+        folder: str | None = None,
     ) -> Slide:
         try:
             with Image.open(source_path) as image:
@@ -170,8 +196,8 @@ class Catalog:
                 connection.execute(
                     """
                     INSERT INTO slides
-                        (id, title, filename, source, external_id, created_at, expires_at, enabled)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                        (id, title, filename, source, external_id, created_at, expires_at, enabled, folder)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         title = excluded.title,
                         filename = excluded.filename,
@@ -187,9 +213,11 @@ class Catalog:
                         external_id,
                         created_at,
                         expires_at,
+                        folder,
                     ),
                 )
                 enabled = bool(old["enabled"]) if old else True
+                stored_folder = old["folder"] if old else folder
                 if image_changed:
                     connection.execute(
                         """
@@ -217,7 +245,9 @@ class Catalog:
                 ).fetchone()
                 if current is None or current["filename"] != old_filename:
                     (self.gallery_dir / old_filename).unlink(missing_ok=True)
-        return Slide(slide_id, title, destination, source, created_at, expires_at, enabled)
+        return Slide(
+            slide_id, title, destination, source, created_at, expires_at, enabled, stored_folder
+        )
 
     @staticmethod
     def _require_local_slide(row: sqlite3.Row | None, slide_id: str) -> None:
@@ -283,7 +313,9 @@ class Catalog:
         external_id: str | None = None,
         expires_at: float | None = None,
         now: float | None = None,
+        folder: str | None = None,
     ) -> Slide:
+        folder = normalize_folder(folder)
         source_path = source_path.expanduser().resolve()
         if not source_path.is_file():
             raise FileNotFoundError(source_path)
@@ -301,9 +333,12 @@ class Catalog:
             external_id,
             expires_at,
             created_at,
+            folder=folder,
         )
 
-    def list_slides(self, now: float | None = None, *, include_all: bool = False) -> list[Slide]:
+    def list_slides(
+        self, now: float | None = None, *, include_all: bool = False, scoped: bool = False
+    ) -> list[Slide]:
         timestamp = now if now is not None else datetime.now().timestamp()
         with self._connect() as connection:
             if include_all:
@@ -312,7 +347,63 @@ class Catalog:
                 ).fetchall()
             else:
                 rows = self._active_rows(connection, timestamp)
+            if scoped:
+                scope = self._state_value(connection, "scope") or ""
+                rows = [row for row in rows if self._in_scope(row["folder"], scope)]
         return [self._slide_from_row(row) for row in rows]
+
+    @staticmethod
+    def _in_scope(folder: str | None, scope: str) -> bool:
+        return not scope or folder == scope or (folder or "").startswith(scope + "/")
+
+    @staticmethod
+    def _folder_paths(rows: list[sqlite3.Row]) -> list[str]:
+        paths: set[str] = set()
+        for row in rows:
+            parts = (row["folder"] or "").split("/")
+            for depth in range(1, len(parts) + 1):
+                path = "/".join(parts[:depth])
+                if path:
+                    paths.add(path)
+        return sorted(paths)
+
+    def list_folders(self) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT DISTINCT folder FROM slides").fetchall()
+        return self._folder_paths(rows)
+
+    def move_slide(self, slide_id: str, folder: str | None) -> Slide:
+        folder = normalize_folder(folder)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("SELECT id FROM slides WHERE id = ?", (slide_id,)).fetchone() is None:
+                raise ValueError(f"Slide not found: {slide_id}")
+            connection.execute("UPDATE slides SET folder = ? WHERE id = ?", (folder, slide_id))
+            row = connection.execute("SELECT * FROM slides WHERE id = ?", (slide_id,)).fetchone()
+        return self._slide_from_row(row)
+
+    def get_scope(self) -> str | None:
+        return self.get_state("scope") or None
+
+    def set_scope(self, folder: str | None, now: float, interval_seconds: int) -> Slide | None:
+        folder = normalize_folder(folder)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute("SELECT DISTINCT folder FROM slides").fetchall()
+            if (
+                folder is not None and folder not in self._folder_paths(rows)
+                and folder != self._state_value(connection, "scope")
+            ):
+                raise ValueError(f"Folder not found: {folder}")
+            connection.execute(
+                """
+                INSERT INTO state(key, value) VALUES ('scope', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (folder or "",),
+            )
+            current = self._initialize_in_scope(connection, now, interval_seconds)
+        return self._slide_from_row(current) if current else None
 
     def set_enabled(self, slide_id: str, enabled: bool) -> Slide:
         with self._connect() as connection:
@@ -341,6 +432,9 @@ class Catalog:
                 """,
                 (slide_id, timestamp),
             ).fetchone()
+            scope = self._state_value(connection, "scope") or ""
+            if row and not self._in_scope(row["folder"], scope):
+                return None
         return self._slide_from_row(row) if row else None
 
     def get_state(self, key: str) -> str | None:
@@ -388,14 +482,98 @@ class Catalog:
     def initialize_carousel(self, now: float, interval_seconds: int) -> Slide | None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            slides = self._active_rows(connection, now)
-            current_id = self._state_value(connection, "current_slide_id")
-            current = next((slide for slide in slides if slide["id"] == current_id), None)
-            if current is None and slides:
-                current = slides[0]
-            slide_id = current["id"] if current else None
-            self._write_carousel_state(connection, slide_id, now + interval_seconds if slide_id else None)
+            current = self._initialize_in_scope(connection, now, interval_seconds)
         return self._slide_from_row(current) if current else None
+
+    def _rotation_groups(
+        self, connection: sqlite3.Connection, now: float
+    ) -> list[tuple[str | None, list[sqlite3.Row]]]:
+        scope = self._state_value(connection, "scope") or ""
+        loose: list[tuple[str | None, list[sqlite3.Row]]] = []
+        folders: dict[str, list[sqlite3.Row]] = {}
+        for row in self._active_rows(connection, now):
+            folder = row["folder"] or ""
+            if not self._in_scope(folder, scope):
+                continue
+            group = self._folder_group(folder, scope)
+            if group is None:
+                loose.append((None, [row]))
+            else:
+                folders.setdefault(group, []).append(row)
+        return loose + [(folder, folders[folder]) for folder in sorted(folders)]
+
+    @staticmethod
+    def _folder_group(folder: str, scope: str) -> str | None:
+        if folder == scope:
+            return None
+        relative = folder[len(scope) + 1:] if scope else folder
+        child = relative.split("/", 1)[0]
+        return f"{scope}/{child}" if scope else child
+
+    def _choose_from_group(
+        self,
+        connection: sqlite3.Connection,
+        group: tuple[str | None, list[sqlite3.Row]],
+        direction: int = 1,
+    ) -> sqlite3.Row:
+        folder, slides = group
+        if folder is None:
+            return slides[0]
+        scope = self._state_value(connection, "scope") or ""
+        cursor = connection.execute(
+            "SELECT slide_id FROM folder_cursors WHERE scope = ? AND folder = ?", (scope, folder)
+        ).fetchone()
+        index = next(
+            (i for i, row in enumerate(slides) if cursor and row["id"] == cursor["slide_id"]),
+            -1 if direction > 0 else 0,
+        )
+        return slides[(index + direction) % len(slides)]
+
+    def _write_selection(
+        self, connection: sqlite3.Connection, row: sqlite3.Row | None,
+        now: float, interval_seconds: int,
+    ) -> None:
+        self._write_carousel_state(
+            connection, row["id"] if row else None, now + interval_seconds if row else None
+        )
+        if row is None:
+            return
+        scope = self._state_value(connection, "scope") or ""
+        folder = row["folder"] or ""
+        group = self._folder_group(folder, scope)
+        if group is not None:
+            connection.execute(
+                """
+                INSERT INTO folder_cursors(scope, folder, slide_id) VALUES (?, ?, ?)
+                ON CONFLICT(scope, folder) DO UPDATE SET slide_id = excluded.slide_id
+                """,
+                (scope, group, row["id"]),
+            )
+
+    def _initialize_in_scope(
+        self, connection: sqlite3.Connection, now: float, interval_seconds: int
+    ) -> sqlite3.Row | None:
+        groups = self._rotation_groups(connection, now)
+        current_id = self._state_value(connection, "current_slide_id")
+        current = next(
+            (row for _, slides in groups for row in slides if row["id"] == current_id), None
+        )
+        if current is None and groups:
+            current = self._choose_from_group(connection, groups[0])
+        self._write_selection(connection, current, now, interval_seconds)
+        return current
+
+    def _next_in_scope(
+        self, connection: sqlite3.Connection,
+        groups: list[tuple[str | None, list[sqlite3.Row]]], direction: int,
+    ) -> sqlite3.Row:
+        current_id = self._state_value(connection, "current_slide_id")
+        index = next(
+            (i for i, (_, slides) in enumerate(groups)
+             if any(row["id"] == current_id for row in slides)),
+            -1 if direction > 0 else 0,
+        )
+        return self._choose_from_group(connection, groups[(index + direction) % len(groups)], direction)
 
     def _state_value(self, connection: sqlite3.Connection, key: str) -> str | None:
         row = connection.execute("SELECT value FROM state WHERE key = ?", (key,)).fetchone()
@@ -404,11 +582,13 @@ class Catalog:
     def select_slide(self, slide_id: str, now: float, interval_seconds: int) -> Slide:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            slides = self._active_rows(connection, now)
+            slides = [row for _, rows in self._rotation_groups(connection, now) for row in rows]
             selected = next((slide for slide in slides if slide["id"] == slide_id), None)
             if selected is None:
-                raise ValueError(f"Slide not found or expired: {slide_id}")
-            self._write_carousel_state(connection, slide_id, now + interval_seconds)
+                raise ValueError(
+                    f"Slide not found or expired, disabled, or outside the current scope: {slide_id}"
+                )
+            self._write_selection(connection, selected, now, interval_seconds)
         return self._slide_from_row(selected)
 
     def advance(self, direction: int, now: float, interval_seconds: int) -> Slide:
@@ -416,18 +596,11 @@ class Catalog:
             raise ValueError("direction must be -1 or 1")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            slides = self._active_rows(connection, now)
-            if not slides:
-                raise ValueError("The gallery has no active slides.")
-            current_id = self._state_value(connection, "current_slide_id")
-            current_index = next(
-                (index for index, slide in enumerate(slides) if slide["id"] == current_id),
-                -1 if direction > 0 else 0,
-            )
-            selected = slides[(current_index + direction) % len(slides)]
-            self._write_carousel_state(
-                connection, selected["id"], now + interval_seconds
-            )
+            groups = self._rotation_groups(connection, now)
+            if not groups:
+                raise ValueError("The current scope has no active slides.")
+            selected = self._next_in_scope(connection, groups, direction)
+            self._write_selection(connection, selected, now, interval_seconds)
         return self._slide_from_row(selected)
 
     def advance_if_due(self, now: float, interval_seconds: int) -> Slide | None:
@@ -438,17 +611,10 @@ class Catalog:
             next_transition = self._state_value(connection, "next_transition_at")
             if not next_transition or float(next_transition) > now:
                 return None
-            slides = self._active_rows(connection, now)
-            if not slides:
+            groups = self._rotation_groups(connection, now)
+            if not groups:
                 self._write_carousel_state(connection, None, None)
                 return None
-            current_id = self._state_value(connection, "current_slide_id")
-            current_index = next(
-                (index for index, slide in enumerate(slides) if slide["id"] == current_id),
-                -1,
-            )
-            selected = slides[(current_index + 1) % len(slides)]
-            self._write_carousel_state(
-                connection, selected["id"], now + interval_seconds
-            )
+            selected = self._next_in_scope(connection, groups, 1)
+            self._write_selection(connection, selected, now, interval_seconds)
         return self._slide_from_row(selected)

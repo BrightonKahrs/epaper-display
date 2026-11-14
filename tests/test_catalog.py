@@ -1,5 +1,7 @@
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from PIL import Image
@@ -165,6 +167,180 @@ class CatalogTests(unittest.TestCase):
         self.assertFalse(first.path.exists())
         self.assertTrue(second.path.exists())
         self.assertEqual([slide.id for slide in self.catalog.list_slides(now=102)], [second.id])
+
+    def test_loose_slides_each_get_a_turn_and_folders_cycle_through_all_descendants(self) -> None:
+        loose1 = self.catalog.add_image(self.image_path, "Loose 1", now=100)
+        space1 = self.catalog.add_image(self.image_path, "Space 1", folder="space", now=101)
+        loose2 = self.catalog.add_image(self.image_path, "Loose 2", now=102)
+        space2 = self.catalog.add_image(
+            self.image_path, "Space 2", folder="space/planets/gas/giants", now=103
+        )
+        self.assertEqual(
+            self.catalog.initialize_carousel(now=200, interval_seconds=10).id, loose1.id
+        )
+        sequence = [
+            self.catalog.advance_if_due(now=210 + index * 10, interval_seconds=10).id
+            for index in range(8)
+        ]
+        self.assertEqual(
+            sequence,
+            [loose2.id, space1.id, loose1.id, loose2.id, space2.id, loose1.id, loose2.id, space1.id],
+        )
+
+    def test_folder_turns_are_equal_and_resume_their_own_cursor_after_restart(self) -> None:
+        space = [
+            self.catalog.add_image(self.image_path, folder=folder, now=100 + index)
+            for index, folder in enumerate(("space", "space/planets", "space/planets/moons"))
+        ]
+        travel = self.catalog.add_image(self.image_path, folder="travel/photos", now=104)
+        self.assertEqual(self.catalog.initialize_carousel(200, 10).id, space[0].id)
+        self.assertEqual(self.catalog.advance(1, 201, 10).id, travel.id)
+        reopened = Catalog(self.catalog.database_path, self.catalog.gallery_dir)
+        self.assertEqual(reopened.initialize_carousel(202, 10).id, travel.id)
+        self.assertEqual(
+            [reopened.advance(1, 203 + index, 10).id for index in range(6)],
+            [space[1].id, travel.id, space[2].id, travel.id, space[0].id, travel.id],
+        )
+        reopened.select_slide(space[1].id, 300, 10)
+        self.assertEqual(reopened.advance(1, 301, 10).id, travel.id)
+        self.assertEqual(reopened.advance(1, 302, 10).id, space[2].id)
+
+    def test_scope_applies_the_same_grouping_at_any_depth_and_persists(self) -> None:
+        outside = self.catalog.add_image(self.image_path, now=100)
+        parent = "space/planets"
+        loose1 = self.catalog.add_image(self.image_path, folder=parent, now=101)
+        loose2 = self.catalog.add_image(self.image_path, folder=parent, now=102)
+        gas1 = self.catalog.add_image(self.image_path, folder=f"{parent}/gas", now=103)
+        gas2 = self.catalog.add_image(self.image_path, folder=f"{parent}/gas/moons/deep", now=104)
+        rocky = self.catalog.add_image(self.image_path, folder=f"{parent}/rocky", now=105)
+        self.catalog.add_image(self.image_path, folder="space/planets-other", now=106)
+        self.assertEqual(self.catalog.set_scope(parent, 200, 10).id, loose1.id)
+        reopened = Catalog(self.catalog.database_path, self.catalog.gallery_dir)
+        self.assertEqual(reopened.get_scope(), parent)
+        self.assertIsNone(reopened.get_slide(outside.id, 201))
+        with self.assertRaisesRegex(ValueError, "outside the current scope"):
+            reopened.select_slide(outside.id, 201, 10)
+        self.assertEqual(
+            [reopened.advance(1, 201 + index, 10).id for index in range(7)],
+            [loose2.id, gas1.id, rocky.id, loose1.id, loose2.id, gas2.id, rocky.id],
+        )
+        self.assertCountEqual(
+            [slide.id for slide in reopened.list_slides(now=210, scoped=True)],
+            [loose1.id, loose2.id, gas1.id, gas2.id, rocky.id],
+        )
+        reopened.set_scope(f"{parent}/gas", 300, 10)
+        self.assertEqual(
+            [reopened.advance(1, 301 + index, 10).id for index in range(4)],
+            [gas2.id, gas1.id, gas2.id, gas1.id],
+        )
+
+    def test_leaf_scope_cycles_slides_without_folders_and_previous_works(self) -> None:
+        first = self.catalog.add_image(self.image_path, folder="space", now=100)
+        second = self.catalog.add_image(self.image_path, folder="space", now=101)
+        self.catalog.set_scope("space", 200, 10)
+        self.assertEqual(self.catalog.advance(-1, 201, 10).id, second.id)
+        self.assertEqual(self.catalog.advance(1, 202, 10).id, first.id)
+        self.assertEqual(self.catalog.advance(1, 203, 10).id, second.id)
+        self.catalog.set_scope(None, 204, 10)
+        self.assertIsNone(self.catalog.get_scope())
+        self.assertEqual(self.catalog.advance(1, 205, 10).id, first.id)
+
+    def test_empty_scope_stays_empty_and_recovers_without_leaking_other_slides(self) -> None:
+        self.catalog.add_image(self.image_path, "Outside", now=100)
+        inside = self.catalog.add_image(self.image_path, folder="space", now=101)
+        self.catalog.set_scope("space", 200, 10)
+        self.catalog.set_enabled(inside.id, False)
+        self.assertIsNone(self.catalog.advance_if_due(210, 10))
+        self.assertIsNone(self.catalog.initialize_carousel(211, 10))
+        self.assertEqual(self.catalog.get_scope(), "space")
+        with self.assertRaisesRegex(ValueError, "scope has no active slides"):
+            self.catalog.advance(1, 212, 10)
+        self.catalog.move_slide(inside.id, None)
+        self.assertIsNone(self.catalog.set_scope("space", 213, 10))
+        arrival = self.catalog.add_image(self.image_path, folder="space/new/deep", now=214)
+        self.assertEqual(self.catalog.initialize_carousel(215, 10).id, arrival.id)
+
+    def test_disabled_expired_deleted_and_moved_slides_do_not_get_folder_turns(self) -> None:
+        loose = self.catalog.add_image(self.image_path, now=100)
+        expired = self.catalog.add_image(
+            self.image_path, folder="expired", expires_at=150, now=101
+        )
+        disabled = self.catalog.add_image(self.image_path, folder="disabled", now=102)
+        first = self.catalog.add_image(self.image_path, folder="space/first", now=103)
+        second = self.catalog.add_image(self.image_path, folder="space/second", now=104)
+        self.catalog.set_enabled(disabled.id, False)
+        self.catalog.initialize_carousel(200, 10)
+        self.assertEqual(self.catalog.advance(1, 201, 10).id, first.id)
+        self.catalog.delete_slide(first.id)
+        self.assertEqual(self.catalog.advance(1, 202, 10).id, loose.id)
+        self.assertEqual(self.catalog.advance(1, 203, 10).id, second.id)
+        self.catalog.set_scope("space", 204, 10)
+        self.catalog.move_slide(second.id, "travel")
+        self.assertIsNone(self.catalog.get_slide(second.id, 205))
+        self.assertIsNone(self.catalog.initialize_carousel(205, 10))
+        self.assertIsNone(self.catalog.get_slide(expired.id, 205))
+        self.catalog.set_scope(None, 206, 10)
+        self.assertEqual(self.catalog.advance(1, 207, 10).id, second.id)
+
+    def test_logical_folder_moves_preserve_files_identity_and_api_refresh_membership(self) -> None:
+        local = self.catalog.add_image(self.image_path, "Local", folder="space/planets", now=100)
+        api = self.catalog.add_image(
+            self.image_path, source="api:weather", external_id="today", now=101
+        )
+        original_bytes = local.path.read_bytes()
+        moved = self.catalog.move_slide(local.id, "art/photos")
+        self.assertEqual((moved.path, moved.created_at, moved.title),
+                         (local.path, local.created_at, local.title))
+        self.assertEqual(moved.path.read_bytes(), original_bytes)
+        self.assertEqual(self.catalog.replace_image(local.id, self.image_path).folder, "art/photos")
+        self.catalog.move_slide(api.id, "weather/today")
+        refreshed = self.catalog.add_image(
+            self.image_path, source="api:weather", external_id="today", now=200
+        )
+        self.assertEqual(refreshed.folder, "weather/today")
+        self.assertIsNone(self.catalog.move_slide(local.id, None).folder)
+        self.assertEqual(self.catalog.list_folders(), ["weather", "weather/today"])
+        with self.assertRaisesRegex(ValueError, "Slide not found"):
+            self.catalog.move_slide("missing", "space")
+
+    def test_folder_paths_are_normalized_and_scope_is_segment_aware(self) -> None:
+        slide = self.catalog.add_image(
+            self.image_path, folder=" /Space_100%\\Planets/ ", now=100
+        )
+        self.assertEqual(slide.folder, "Space_100%/Planets")
+        self.catalog.add_image(self.image_path, folder="Space_100%/Planets-extra", now=101)
+        self.catalog.set_scope("Space_100%/Planets", 200, 10)
+        self.assertEqual([s.id for s in self.catalog.list_slides(201, scoped=True)], [slide.id])
+        for folder in ("space/../art", "./space", "space//art", "space/\nart", "space/ /art"):
+            with self.subTest(folder=folder), self.assertRaises(ValueError):
+                self.catalog.move_slide(slide.id, folder)
+        with self.assertRaisesRegex(ValueError, "Folder not found"):
+            self.catalog.set_scope("missing", 201, 10)
+        self.assertEqual(self.catalog.get_scope(), "Space_100%/Planets")
+
+    def test_existing_database_migrates_slides_to_root_without_losing_state(self) -> None:
+        path = self.root / "legacy.sqlite3"
+        with closing(sqlite3.connect(path)) as connection, connection:
+            connection.executescript(
+                """
+                CREATE TABLE slides (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL, filename TEXT NOT NULL,
+                    source TEXT NOT NULL, external_id TEXT, created_at REAL NOT NULL,
+                    expires_at REAL, enabled INTEGER NOT NULL DEFAULT 1
+                );
+                INSERT INTO slides VALUES ('old', 'Original', 'source.png', 'ssh', NULL, 100, NULL, 1);
+                CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO state VALUES ('current_slide_id', 'old');
+                INSERT INTO state VALUES ('rotation_paused', '1');
+                """
+            )
+        migrated = Catalog(path, self.catalog.gallery_dir)
+        slide = migrated.initialize_carousel(200, 10)
+        self.assertEqual((slide.id, slide.folder, slide.title), ("old", None, "Original"))
+        self.assertEqual(migrated.get_state("rotation_paused"), "1")
+        self.assertEqual(migrated.get_state("next_transition_at"), "")
+        self.assertIsNone(migrated.get_scope())
+        self.assertEqual(migrated.move_slide("old", "space").folder, "space")
 
 
 if __name__ == "__main__":
