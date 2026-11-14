@@ -43,6 +43,10 @@ class CliTests(unittest.TestCase):
                             "city=Philadelphia",
                             "--token-env",
                             "WEATHER_TOKEN",
+                            "--folder",
+                            "weather",
+                            "--folder-key",
+                            "metadata.folder",
                         ]
                     ),
                     0,
@@ -58,6 +62,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(sources[0]["query_params"], {"city": "Philadelphia"})
             self.assertEqual(sources[0]["token_env"], "WEATHER_TOKEN")
             self.assertEqual(sources[0]["ttl_seconds"], 1200)
+            self.assertEqual(sources[0]["folder"], "weather")
+            self.assertEqual(sources[0]["folder_key"], "metadata.folder")
 
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(
@@ -166,6 +172,7 @@ class PickerTests(unittest.TestCase):
             "--config", str(self.config), "sources", "configure",
             "chart", "https://example.test/chart", "--type", "image",
             "--query-param", "width=1200", "--ttl-seconds", "900",
+            "--folder", "space/charts",
         ]
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(arguments), 0)
@@ -181,6 +188,8 @@ class PickerTests(unittest.TestCase):
         self.assertEqual(listed["query_params"], {"width": "1200"})
         self.assertEqual(listed["ttl_seconds"], 900)
         self.assertFalse(listed["enabled"])
+        self.assertEqual(listed["folder"], "space/charts")
+        self.assertEqual(listed["folder_key"], "folder")
         registry = ApiSourceRegistry(self.root / "state" / "api-specs.sqlite3")
         self.assertEqual(registry.get("chart").source_type, "image")
 

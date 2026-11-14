@@ -10,21 +10,22 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
-from epaper_display.catalog import Catalog
+from epaper_display.catalog import Catalog, normalize_folder
 from epaper_display.source_registry import ApiSource, ApiSourceRegistry
 
 
 _MAX_FEED_BYTES = 2 * 1024 * 1024
 _MAX_IMAGE_BYTES = 25 * 1024 * 1024
+_MISSING = object()
 
 
-def _mapped_value(value: Any, key_path: str) -> Any:
+def _mapped_value(value: Any, key_path: str, default: Any = None) -> Any:
     if not key_path:
         return value
     for key in key_path.split("."):
         if not isinstance(value, dict):
-            return None
-        value = value.get(key)
+            return default
+        value = value.get(key, default)
     return value
 
 
@@ -64,6 +65,12 @@ def _parse_expiration(value: Any) -> float | None:
     if parsed.tzinfo is None:
         raise ValueError("expires_at must include a timezone.")
     return parsed.timestamp()
+
+
+def _parse_folder(value: Any) -> str | None:
+    if value is not None and not isinstance(value, str):
+        raise ValueError("Slide folder must be a string or null.")
+    return normalize_folder(value)
 
 
 def _same_origin(first_url: str, second_url: str) -> bool:
@@ -114,12 +121,16 @@ def _import_image(
     expires_at: float | None,
     now: float,
     token: str | None,
+    *,
+    folder: str | None = None,
+    update_folder: bool = False,
 ) -> None:
     image_path = _download_image(url, catalog, source.timeout_seconds, token)
     try:
         catalog.add_image(
             image_path, title, source=f"api:{source.id}",
             external_id=external_id, expires_at=expires_at, now=now,
+            folder=folder, update_folder=update_folder,
         )
     finally:
         image_path.unlink(missing_ok=True)
@@ -140,7 +151,8 @@ def refresh_source(
         )
     if source.source_type == "image":
         _import_image(
-            source, catalog, _request_url(source), "image", source.id, None, timestamp, token
+            source, catalog, _request_url(source), "image", source.id, None, timestamp, token,
+            folder=source.folder, update_folder=source.folder is not None,
         )
         source_registry.record_success(source.id, timestamp, source.ttl_seconds)
         return 1
@@ -167,11 +179,17 @@ def refresh_source(
             if source.expires_at_key
             else None
         )
+        folder = _mapped_value(entry, source.folder_key, _MISSING) if source.folder_key else _MISSING
+        if folder is _MISSING and source.folder is not None:
+            folder = source.folder
+        update_folder = folder is not _MISSING
+        parsed_folder = _parse_folder(folder) if update_folder else None
         resolved_image_url = urljoin(source.url, image_url)
         image_token = token if _same_origin(source.url, resolved_image_url) else None
         _import_image(
             source, catalog, resolved_image_url, str(external_id),
             title or str(external_id), _parse_expiration(expiration), timestamp, image_token,
+            folder=parsed_folder, update_folder=update_folder,
         )
         imported += 1
     source_registry.record_success(source.id, timestamp, source.ttl_seconds)

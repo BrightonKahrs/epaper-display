@@ -79,7 +79,8 @@ flowchart LR
 
 - **API source registry (`source_registry.py`)** owns source specifications:
   endpoint URL, source type (`json` or `image`), query parameters, enabled state, TTL, timeout, response
-  mappings, and the name of an optional token environment variable. It also
+  mappings, an optional default folder, and the name of an optional token
+  environment variable. It also
   owns each source's last-success time, next-refresh deadline, failure count,
   and latest error.
 - **TTL refresh worker (`refresh_worker.py` and `service.py`)** checks enabled
@@ -166,8 +167,9 @@ independent of playback scope.
 ## Slide and source contracts
 
 A slide is a local image plus metadata, rather than a live API response or web
-page. For a JSON feed, each API item needs a stable identifier and an image URL; a title and
-timezone-qualified ISO-8601 expiration are optional. The source ID and item ID
+page. For a JSON feed, each API item needs a stable identifier and an image URL;
+a title, timezone-qualified ISO-8601 expiration, and logical `folder` path are
+optional. The source ID and item ID
 together identify the catalog item, so later refreshes update it rather than
 creating a duplicate.
 
@@ -179,8 +181,24 @@ TTL scheduling, and failure backoff as JSON feeds. No JSON mappings are applied.
 Invalid image responses leave the previous cached slide intact.
 
 Source specifications persist their type; older databases are migrated with
-`json` as the default. Existing slide enabled states and user-assigned folders
-survive refreshes and replacements. New API slides start unfiled. Changes
+`json` as the default. Source specifications also persist an optional default
+folder and `folder_key` mapping (default `folder`, dot-separated paths supported).
+These columns are added transactionally to existing registries without
+resetting TTL state.
+
+Folder metadata is validated before downloading its image. A supplied
+per-item folder takes precedence over the source default, including explicit
+`null` or an empty/root path to unfile a slide. A missing mapped field uses
+the source default if configured. With neither, new API slides start unfiled
+and existing folder assignments are preserved. An empty `folder_key` ignores
+the feed's field. Direct-image sources use only the source default.
+When present, an API assignment updates the existing folder on each successful
+import, overriding any local move. The image and folder update share the
+catalog transaction and file rollback path, so a failed item import leaves its
+previous image and folder intact; a feed refresh is not atomic across items.
+
+Existing slide enabled states survive refreshes; local replacements retain
+folder membership. Changes
 to stored image bytes increment a slide revision so the service redraws an
 updated current slide without waiting for rotation.
 

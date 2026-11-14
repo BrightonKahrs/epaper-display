@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Iterator
 from urllib.parse import urlparse
 
+from epaper_display.catalog import normalize_folder
+
 
 @dataclass(frozen=True)
 class ApiSource:
@@ -24,6 +26,8 @@ class ApiSource:
     timeout_seconds: int = 20
     enabled: bool = True
     source_type: str = "json"
+    folder: str | None = None
+    folder_key: str = "folder"
 
     def validate(self) -> None:
         if self.source_type not in ("json", "image"):
@@ -64,6 +68,11 @@ class ApiSource:
             raise ValueError("expires_at_key must be a string.")
         if not isinstance(self.enabled, bool):
             raise ValueError("enabled must be a boolean.")
+        if self.folder is not None and not isinstance(self.folder, str):
+            raise ValueError("Source folder must be a string or null.")
+        normalize_folder(self.folder)
+        if not isinstance(self.folder_key, str):
+            raise ValueError("folder_key must be a string.")
 
 
 class ApiSourceRegistry:
@@ -109,6 +118,12 @@ class ApiSourceRegistry:
                 connection.execute(
                     "ALTER TABLE source_specs ADD COLUMN source_type TEXT NOT NULL DEFAULT 'json'"
                 )
+            if "folder" not in columns:
+                connection.execute("ALTER TABLE source_specs ADD COLUMN folder TEXT")
+            if "folder_key" not in columns:
+                connection.execute(
+                    "ALTER TABLE source_specs ADD COLUMN folder_key TEXT NOT NULL DEFAULT 'folder'"
+                )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -140,6 +155,8 @@ class ApiSourceRegistry:
             timeout_seconds=row["timeout_seconds"],
             enabled=bool(row["enabled"]),
             source_type=row["source_type"],
+            folder=row["folder"],
+            folder_key=row["folder_key"],
         )
 
     def save(self, source: ApiSource) -> None:
@@ -150,8 +167,8 @@ class ApiSourceRegistry:
                 INSERT INTO source_specs (
                     id, url, ttl_seconds, query_params_json, token_env, slides_key,
                     id_key, title_key, image_url_key, expires_at_key, timeout_seconds,
-                    enabled, source_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    enabled, source_type, folder, folder_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     url = excluded.url,
                     ttl_seconds = excluded.ttl_seconds,
@@ -165,6 +182,8 @@ class ApiSourceRegistry:
                     timeout_seconds = excluded.timeout_seconds,
                     enabled = excluded.enabled,
                     source_type = excluded.source_type,
+                    folder = excluded.folder,
+                    folder_key = excluded.folder_key,
                     updated_at = unixepoch()
                 """,
                 (
@@ -181,6 +200,8 @@ class ApiSourceRegistry:
                     source.timeout_seconds,
                     int(source.enabled),
                     source.source_type,
+                    (normalize_folder(source.folder) or "/") if source.folder is not None else None,
+                    source.folder_key,
                 ),
             )
             connection.execute(

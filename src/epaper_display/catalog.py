@@ -140,6 +140,7 @@ class Catalog:
         *,
         replace_local: bool = False,
         folder: str | None = None,
+        update_folder: bool = False,
     ) -> Slide:
         try:
             with Image.open(source_path) as image:
@@ -203,7 +204,8 @@ class Catalog:
                         filename = excluded.filename,
                         source = excluded.source,
                         external_id = excluded.external_id,
-                        expires_at = excluded.expires_at
+                        expires_at = excluded.expires_at,
+                        folder = CASE WHEN ? THEN excluded.folder ELSE slides.folder END
                     """,
                     (
                         slide_id,
@@ -214,10 +216,11 @@ class Catalog:
                         created_at,
                         expires_at,
                         folder,
+                        int(update_folder),
                     ),
                 )
                 enabled = bool(old["enabled"]) if old else True
-                stored_folder = old["folder"] if old else folder
+                stored_folder = old["folder"] if old and not update_folder else folder
                 if image_changed:
                     connection.execute(
                         """
@@ -314,6 +317,7 @@ class Catalog:
         expires_at: float | None = None,
         now: float | None = None,
         folder: str | None = None,
+        update_folder: bool = False,
     ) -> Slide:
         folder = normalize_folder(folder)
         source_path = source_path.expanduser().resolve()
@@ -334,6 +338,7 @@ class Catalog:
             expires_at,
             created_at,
             folder=folder,
+            update_folder=update_folder,
         )
 
     def list_slides(

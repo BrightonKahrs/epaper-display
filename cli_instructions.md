@@ -128,7 +128,9 @@ epd move --pick --root
 `move` changes only folder membership: the ID, image file, title, enabled
 state, and import order stay intact. The move picker includes all local and
 API slides, including disabled or expired ones, even outside the playback scope.
-Folder membership survives image replacement and API refreshes. Moving the
+Folder membership survives image replacement and API refreshes that do not
+supply a folder assignment. API-provided folders or source defaults take
+precedence on refresh, as described below. Moving the
 last slide out of a folder removes that otherwise empty folder from the picker.
 
 ```sh
@@ -312,7 +314,7 @@ Failed downloads or invalid images retain the cached slide and report an error
 in `status`, with the same retry backoff used for JSON feeds.
 
 Direct sources support `--query-param`, `--token-env`, `--timeout-seconds`,
-TTL, and source enable/disable. They accept PNG, JPEG, WebP, BMP, GIF, and TIFF
+`--folder`, TTL, and source enable/disable. They accept PNG, JPEG, WebP, BMP, GIF, and TIFF
 images supported by the gallery, not SVG or HTML pages. Images need not match
 the panel dimensions; the renderer fits them. JSON mapping options do not apply.
 
@@ -355,6 +357,67 @@ automatically, with older sources treated as JSON feeds. When reconfiguring an
 image source, include `--type image` again; omitting it selects JSON mode.
 If you change a source between JSON and image modes, previously imported slides
 are retained and can be individually disabled if no longer needed.
+
+### API slide folder metadata
+
+JSON slide objects can include an optional `folder` path. It uses the same
+logical paths and nested-folder scheduling as local slides:
+
+```json
+{
+  "slides": [
+    {
+      "id": "jupiter",
+      "title": "Jupiter",
+      "image_url": "https://example.com/images/jupiter.png",
+      "folder": "space/planets"
+    }
+  ]
+}
+```
+
+By default the app reads `folder` from each slide object. For a differently
+shaped feed, set `--folder-key metadata.folder` to map a nested field.
+Use `--folder-key ""` to ignore the feed's folder field.
+
+You can also configure a source-level default folder for JSON feeds or
+direct-image endpoints (which have no JSON metadata):
+
+```sh
+epd sources configure space-feed https://example.com/api/slides \
+  --folder space --folder-key metadata.folder
+epd sources configure chart https://example.com/chart.png \
+  --type image --folder dashboards/charts
+epd refresh --force
+```
+
+Folder assignment on each successful import follows these rules:
+
+| Input | Result |
+| --- | --- |
+| A per-slide folder string | Assign that path, overriding the source default. |
+| Explicit per-slide `null`, `""`, or `"/"` | Assign the unfiled root, overriding the default. |
+| No mapped folder field, but a source `--folder` | Assign the source default. |
+| Neither per-slide folder nor source default | Keep an existing slide's folder; new slides start unfiled. |
+
+Supplied metadata and source defaults **update existing slides on refresh**,
+so a local `move` can be overwritten by the next refresh. To manage folders
+only on the Pi, use `--folder-key ""` and leave off the source `--folder`.
+An explicit source `--folder /` forces root assignment rather than preserving
+an existing folder. Folder changes do not create a duplicate slide or reset
+its enabled state, and they take effect in scoped playback without a restart.
+
+Folders must be strings or `null`; invalid types or paths such as `space/../art`
+fail that import and are reported through the usual source error/backoff.
+Imports completed earlier in a JSON response are not rolled back if a later
+item fails. Images and folder metadata for the failing item remain unchanged.
+
+`sources list` includes `folder` (the default) and `folder_key` (the mapping).
+Existing source databases gain these settings automatically without resetting
+their refresh state. Defaults are no source folder and a `folder` field mapping;
+old feeds without that field keep their current behavior. As with other source
+settings, `sources configure` replaces the specification: repeat any default
+folder and custom mapping you want to retain when reconfiguring a source.
 
 ### Source state and authentication
 

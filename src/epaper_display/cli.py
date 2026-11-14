@@ -117,6 +117,13 @@ def _parser() -> argparse.ArgumentParser:
     configure.add_argument("--title-key", default="title")
     configure.add_argument("--image-url-key", default="image_url")
     configure.add_argument("--expires-at-key", default="expires_at")
+    configure.add_argument(
+        "--folder", help="Default slide folder; '/' assigns the unfiled root."
+    )
+    configure.add_argument(
+        "--folder-key", default="folder",
+        help="JSON folder field path (default: folder); use an empty string to ignore it.",
+    )
     configure.add_argument("--timeout-seconds", type=int, default=20)
     for action in ("enable", "disable", "remove"):
         source_action = source_commands.add_parser(action)
@@ -396,6 +403,8 @@ def main(argv: list[str] | None = None) -> int:
                                 "title_key": source.title_key,
                                 "image_url_key": source.image_url_key,
                                 "expires_at_key": source.expires_at_key,
+                                "folder": source.folder,
+                                "folder_key": source.folder_key,
                                 "timeout_seconds": source.timeout_seconds,
                             }
                             for source in source_registry.list_sources()
@@ -427,6 +436,8 @@ def main(argv: list[str] | None = None) -> int:
                         title_key=args.title_key,
                         image_url_key=args.image_url_key,
                         expires_at_key=args.expires_at_key,
+                        folder=args.folder,
+                        folder_key=args.folder_key,
                         timeout_seconds=args.timeout_seconds,
                         enabled=existing_source.enabled if existing_source else True,
                     )
