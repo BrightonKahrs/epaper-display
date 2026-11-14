@@ -23,9 +23,9 @@ and a Philadelphia-themed slide.
 
 ## Documentation
 
-| Guide | Contents |
-| --- | --- |
-| [First-time setup](first_time_setup.md) | Prepare the Pi, install the app, display your first image, and optionally start it at boot. |
-| [CLI instructions](cli_instructions.md) | Add and manage slides, control playback, configure API sources, and update the app. |
-| [Software architecture](architecture.md) | Components, persistent storage, rendering, and API source contracts. |
-| [Hardware architecture](hardware_architecture.md) | Hardware connections, a system diagram, parts, and purchasing links. |
+| Guide                                             | Contents                                                                                    |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [First-time setup](first_time_setup.md)           | Prepare the Pi, install the app, display your first image, and optionally start it at boot. |
+| [CLI instructions](cli_instructions.md)           | Add and manage slides, control playback, configure API sources, and update the app.         |
+| [Software architecture](software_architecture.md) | Components, persistent storage, rendering, and API source contracts.                        |
+| [Hardware architecture](hardware_architecture.md) | Hardware connections, a system diagram, parts, and purchasing links.                        |

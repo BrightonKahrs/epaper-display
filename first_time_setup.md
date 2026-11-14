@@ -52,7 +52,7 @@ copy. Run commands inside this virtual environment.
 Import one of the checked-in portrait examples:
 
 ```sh
-epaper-display add examples/slides/01-microsoft.png
+epaper-display add examples/slides/microsoft-logo.png
 epaper-display list
 epaper-display run
 ```
@@ -78,13 +78,13 @@ disabling, deleting, and pausing.
 
 Without a configuration file or environment overrides, the app uses:
 
-| Setting | Default |
-| --- | --- |
-| Data directory | `~/.local/share/epaper-display` |
-| Slide interval | 1800 seconds (30 minutes) |
-| API refresh polling | 30 seconds |
-| Orientation | Portrait |
-| Portrait rotation | 90 degrees |
+| Setting             | Default                         |
+| ------------------- | ------------------------------- |
+| Data directory      | `~/.local/share/epaper-display` |
+| Slide interval      | 1800 seconds (30 minutes)       |
+| API refresh polling | 30 seconds                      |
+| Orientation         | Portrait                        |
+| Portrait rotation   | 90 degrees                      |
 
 `catalog.sqlite3`, `api-specs.sqlite3`, and `gallery/` live inside the data
 directory. They persist across restarts. Confirm the paths with
@@ -95,6 +95,8 @@ For a per-user configuration, copy the example and edit it:
 ```sh
 cp config.example.json config.json
 ```
+
+F
 
 ```json
 {
@@ -153,7 +155,7 @@ import your images again using the service's user and environment, for example:
 sudo -u pi env EPAPER_CONFIG=/etc/epaper-display/config.json \
   EPAPER_DATA_DIR=/var/lib/epaper-display \
   /opt/epaper-display/.venv/bin/epaper-display add \
-  /opt/epaper-display/examples/slides/01-microsoft.png
+  /opt/epaper-display/examples/slides/microsoft-logo.png
 ```
 
 Adjust the account and paths if you customized the unit. Use that same command
@@ -185,7 +187,7 @@ Activate with `source .venv/bin/activate` on Linux/macOS, or
 ```sh
 python -m pip install -e .
 python scripts/generate_demo_slides.py
-epaper-display add examples/slides/01-microsoft.png
+epaper-display add examples/slides/microsoft-logo.png
 epaper-display run --preview preview.png
 ```
 
