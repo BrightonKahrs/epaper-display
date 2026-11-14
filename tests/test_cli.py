@@ -144,7 +144,7 @@ class PickerTests(unittest.TestCase):
             patch("sys.stdin.isatty", return_value=terminal),
             patch("sys.stdout.isatty", return_value=terminal),
         ):
-            result = main(["--config", str(self.config), "pick"])
+            result = main(["--config", str(self.config), "display", "--pick"])
         return result, stdout.getvalue(), stderr.getvalue()
 
     def test_replace_and_delete_local_slide_commands(self) -> None:
@@ -200,6 +200,29 @@ class PickerTests(unittest.TestCase):
         with contextlib.redirect_stderr(stderr):
             self.assertEqual(main(["--config", str(self.config), "disable", "missing"]), 2)
         self.assertIn("Slide not found", stderr.getvalue())
+
+    def test_display_by_id_and_legacy_aliases(self) -> None:
+        first = self.catalog.add_image(self.image, "First", now=10)
+        second = self.catalog.add_image(self.image, "Second", now=11)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["--config", str(self.config), "display", second.id]), 0)
+            self.assertEqual(self.catalog.get_state("current_slide_id"), second.id)
+            self.assertEqual(main(["--config", str(self.config), "show", first.id]), 0)
+            self.assertEqual(self.catalog.get_state("current_slide_id"), first.id)
+            with (
+                patch("sys.stdin.isatty", return_value=True),
+                patch("sys.stdout.isatty", return_value=True),
+                patch("epaper_display.cli.questionary.select") as menu,
+            ):
+                menu.return_value.ask.return_value = second.id
+                self.assertEqual(main(["--config", str(self.config), "pick"]), 0)
+            self.assertEqual(self.catalog.get_state("current_slide_id"), second.id)
+        self.catalog.set_enabled(second.id, False)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(main(["--config", str(self.config), "display", second.id]), 2)
+        self.assertIn("Slide not found or expired", stderr.getvalue())
+        self.assertEqual(self.catalog.get_state("current_slide_id"), second.id)
 
     def test_pause_resume_commands_report_persisted_status(self) -> None:
         slide = self.catalog.add_image(self.image)
@@ -408,7 +431,7 @@ class PickerTests(unittest.TestCase):
 
 class CommandSyntaxTests(unittest.TestCase):
     def test_management_commands_require_id_or_pick_but_not_both(self) -> None:
-        for command in ("delete", "replace", "enable", "disable"):
+        for command in ("delete", "replace", "enable", "disable", "display"):
             image = ["new.png"] if command == "replace" else []
             with self.subTest(command=command):
                 by_id = _parser().parse_args([command, "slide-id", *image])

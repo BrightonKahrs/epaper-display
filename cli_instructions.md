@@ -89,14 +89,16 @@ not resolve, use the Pi's current IP address.
 ## Select slides
 
 ```sh
-epaper-display pick
-epaper-display show <slide-id>
+epaper-display display --pick
+epaper-display display <slide-id>
 epaper-display next
 epaper-display previous
 ```
 
 In the picker, use Up/Down and Enter; Ctrl+C cancels. It starts on the current
 slide when available and includes IDs to distinguish duplicate titles.
+Use either a slide ID or `--pick`, not both. The older `pick` and `show <slide-id>`
+commands remain available as compatibility aliases.
 
 Selections persist in SQLite. The running carousel displays the selection on
 its next poll, after any panel refresh already in progress finishes. If stopped,
@@ -116,8 +118,7 @@ position, and enabled state. The running carousel redraws a replaced current
 slide. Deletion permanently removes the entry and its gallery image.
 
 Provide either a slide ID or `--pick`, never both. The old positional `pick`
-syntax has been replaced by the `--pick` flag for management commands;
-the standalone `epaper-display pick` command still selects a slide for display.
+syntax has been replaced by the `--pick` flag for management commands.
 
 The management pickers include disabled and expired local slides. `delete --pick`
 asks for confirmation; deletion by ID does not. Cancelling leaves the entry
@@ -151,8 +152,8 @@ epaper-display resume
 epaper-display status
 ```
 
-Pausing stops timed rotation, not the service or API refreshes. Manual `pick`,
-`show`, `next`, and `previous` commands still work. Pause persists across service
+Pausing stops timed rotation, not the service or API refreshes. Manual `display`,
+`next`, and `previous` commands still work. Pause persists across service
 restarts and reboots. While paused, `status` reports `rotation_paused: true` and
 no next transition.
 
@@ -202,7 +203,7 @@ For a checkout installed under the remote user's home directory:
 
 ```sh
 ssh pi@raspberrypi.local '~/e-paper-display/.venv/bin/epaper-display status'
-ssh -t pi@raspberrypi.local '~/e-paper-display/.venv/bin/epaper-display pick'
+ssh -t pi@raspberrypi.local '~/e-paper-display/.venv/bin/epaper-display display --pick'
 ```
 
 Use `ssh -t` for all interactive pickers. Calling the virtual environment's
@@ -225,7 +226,7 @@ epaper-display sources configure image-test \
   'https://placehold.co/1200x1600/png?text=E-paper+API+test' \
   --type image --ttl-seconds 3600
 epaper-display refresh --force
-epaper-display pick
+epaper-display display --pick
 ```
 
 The source ID becomes the slide title. Each successful refresh updates the same

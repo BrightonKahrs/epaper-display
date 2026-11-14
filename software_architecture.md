@@ -63,7 +63,7 @@ flowchart LR
 ### Input and integration modules
 
 - **SSH CLI (`cli.py`)** handles explicit user actions: importing local images,
-  selecting slides (including the interactive `pick` menu), reporting status,
+  selecting slides (including the interactive `display --pick` menu), reporting status,
   triggering refreshes, and managing API
   source specifications. It calls the registry or catalog directly and does
   not implement persistence itself.

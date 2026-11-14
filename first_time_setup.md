@@ -69,7 +69,7 @@ virtual environment, and select a slide:
 ```sh
 cd ~/e-paper-display
 source .venv/bin/activate
-epaper-display pick
+epaper-display display --pick
 ```
 
 For custom artwork, start with a 1200 x 1600 portrait PNG.

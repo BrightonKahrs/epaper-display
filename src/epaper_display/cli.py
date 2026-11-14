@@ -56,8 +56,10 @@ def _parser() -> argparse.ArgumentParser:
     for action in ("enable", "disable"):
         command = commands.add_parser(action, help=f"{action.capitalize()} a slide.")
         _add_slide_target(command)
-    commands.add_parser("pick", help="Choose a slide from an interactive arrow-key menu.")
-    select = commands.add_parser("show", help="Select a slide by ID.")
+    display = commands.add_parser("display", help="Select a slide for display.")
+    _add_slide_target(display)
+    commands.add_parser("pick", help="Compatibility alias for 'display --pick'.")
+    select = commands.add_parser("show", help="Compatibility alias for 'display <slide-id>'.")
     select.add_argument("slide_id")
     commands.add_parser("next", help="Advance to the next slide.")
     commands.add_parser("previous", help="Select the previous slide.")
@@ -249,16 +251,19 @@ def main(argv: list[str] | None = None) -> int:
             catalog.delete_slide(slide_id)
             print(f"Deleted {slide_id}.")
             return 0
-        if args.command == "pick":
-            selected_id = _pick_slide(catalog, now)
-            if selected_id is None:
-                print("Selection cancelled.")
-                return 0
-            slide = catalog.select_slide(selected_id, time.time(), config.interval_seconds)
-            print(f"Selected {slide.id}: {slide.title}")
-            return 0
-        if args.command == "show":
-            slide = catalog.select_slide(args.slide_id, now, config.interval_seconds)
+        if args.command in ("display", "pick", "show"):
+            interactive = args.command == "pick" or (
+                args.command == "display" and args.pick
+            )
+            if interactive:
+                slide_id = _pick_slide(catalog, now)
+                if slide_id is None:
+                    print("Selection cancelled.")
+                    return 0
+                now = time.time()
+            else:
+                slide_id = args.slide_id
+            slide = catalog.select_slide(slide_id, now, config.interval_seconds)
             print(f"Selected {slide.id}: {slide.title}")
             return 0
         if args.command == "next":
