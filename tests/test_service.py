@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -12,6 +13,65 @@ from epaper_display.source_registry import ApiSourceRegistry
 
 
 class ServiceTests(unittest.TestCase):
+    def test_reported_render_state_tracks_success_failure_and_empty_gallery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            catalog = Catalog(root / "catalog.sqlite3", root / "gallery")
+            sources = ApiSourceRegistry(root / "sources.sqlite3")
+            image = root / "source.png"
+            Image.new("RGB", (20, 20), "red").save(image)
+            first = catalog.add_image(image, "First", now=100)
+            second = catalog.add_image(image, "Second", now=101)
+            service = CarouselService(AppConfig(root), catalog, sources, PreviewDisplay(root / "preview.png"))
+            service.tick(now=200)
+            control = Catalog(catalog.database_path, catalog.gallery_dir)
+            self.assertEqual(control.get_state("displayed_slide_id"), first.id)
+            self.assertEqual(control.get_state("display_target"), "preview")
+            self.assertEqual(control.get_state("displayed_at"), "200")
+            control.select_slide(second.id, now=201, interval_seconds=1800)
+
+            def failing_display(*args) -> None:
+                state = control.snapshot(now=202).state
+                self.assertEqual(state["displayed_slide_id"], first.id)
+                self.assertEqual(state["rendering_slide_id"], second.id)
+                raise OSError("panel unavailable")
+
+            with patch("epaper_display.service.show_slide", side_effect=failing_display), self.assertLogs(
+                "epaper_display.service", level="ERROR"
+            ):
+                service.tick(now=202)
+            state = control.snapshot(now=202).state
+            self.assertEqual(state["current_slide_id"], second.id)
+            self.assertEqual(state["displayed_slide_id"], first.id)
+            self.assertEqual(state["rendering_slide_id"], "")
+            self.assertIn("panel unavailable", state["display_error"])
+            with patch("epaper_display.service.show_slide") as display:
+                service.tick(now=207)
+                display.assert_not_called()
+            self.assertEqual(control.get_state("service_heartbeat_at"), "207")
+            service.tick(now=232)
+            self.assertEqual(control.get_state("displayed_slide_id"), second.id)
+            self.assertEqual(control.get_state("display_error"), "")
+            control.set_enabled(first.id, False)
+            control.set_enabled(second.id, False)
+            service.tick(now=233)
+            self.assertFalse(control.get_state("current_slide_id"))
+            self.assertEqual(control.get_state("displayed_slide_id"), second.id)
+
+    def test_clean_service_shutdown_reports_stopped(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            catalog = Catalog(root / "catalog.sqlite3", root / "gallery")
+            service = CarouselService(
+                AppConfig(root), catalog, ApiSourceRegistry(root / "sources.sqlite3"),
+                PreviewDisplay(root / "preview.png"),
+            )
+            with patch.object(service, "tick", side_effect=service.stop):
+                service.run()
+            self.assertEqual(catalog.get_state("service_status"), "stopped")
+            self.assertEqual(catalog.get_state("rendering_slide_id"), "")
+            self.assertGreater(float(catalog.get_state("service_heartbeat_at")), 0)
+
     def test_running_service_observes_scope_and_folder_moves_even_while_paused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

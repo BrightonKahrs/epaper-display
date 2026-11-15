@@ -77,6 +77,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("next", help="Advance to the next slide.")
     commands.add_parser("previous", help="Select the previous slide.")
     commands.add_parser("status", help="Show carousel and API source status.")
+    commands.add_parser("dashboard", help="Open the mouse- and keyboard-driven terminal control panel.")
     commands.add_parser("pause", help="Pause automatic slide rotation.")
     commands.add_parser("resume", help="Resume automatic rotation with a fresh interval.")
 
@@ -252,6 +253,22 @@ def main(argv: list[str] | None = None) -> int:
         source_registry = _make_source_registry(config)
         now = time.time()
 
+        if args.command == "dashboard":
+            if not sys.stdin.isatty() or not sys.stdout.isatty():
+                raise ValueError(
+                    "'dashboard' requires an interactive terminal. Over SSH, use 'ssh -t'."
+                )
+            try:
+                from epaper_display.dashboard import run_dashboard
+            except ModuleNotFoundError as exc:
+                if exc.name != "textual":
+                    raise
+                raise ValueError(
+                    "Dashboard dependencies are missing; install with python -m pip install -e '.[tui]'."
+                ) from exc
+            run_dashboard(config, catalog, source_registry)
+            return 0
+
         if args.command == "add":
             for image in args.images:
                 slide = catalog.add_image(image, folder=args.folder)
@@ -361,6 +378,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.command == "status":
+            runtime = catalog.snapshot(now, queue_limit=0).state
             state = {
                 "data_dir": str(config.data_dir),
                 "api_specs_database": str(config.api_specs_database_path),
@@ -371,6 +389,13 @@ def main(argv: list[str] | None = None) -> int:
                 "current_slide_id": catalog.get_state("current_slide_id"),
                 "rotation_paused": catalog.get_state("rotation_paused") == "1",
                 "next_transition_at": _timestamp(catalog.get_state("next_transition_at")),
+                "service_status": runtime.get("service_status", "unknown"),
+                "service_heartbeat_at": _timestamp(runtime.get("service_heartbeat_at")),
+                "display_target": runtime.get("display_target"),
+                "displayed_slide_id": runtime.get("displayed_slide_id"),
+                "displayed_at": _timestamp(runtime.get("displayed_at")),
+                "rendering_slide_id": runtime.get("rendering_slide_id") or None,
+                "display_error": runtime.get("display_error") or None,
                 "api_sources": source_registry.refresh_status(),
             }
             print(json.dumps(state, indent=2))

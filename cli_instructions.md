@@ -61,7 +61,76 @@ logical folder paths (`/` means no folder).
 `list --all` also includes disabled and expired entries and labels their state.
 `list --scoped` limits either listing to the current playback scope.
 `status` reports the total and scoped active slide counts, scope, selected slide,
-pause state, next transition, storage paths, and API refresh status.
+pause state, next transition, storage paths, and API refresh status. It also
+reports the service heartbeat, last successful display refresh, current refresh,
+and display error separately from the selected slide.
+
+## Terminal dashboard
+
+Install the optional dashboard extra in the project's virtual environment, then
+launch it in a second terminal while the carousel continues running:
+
+```sh
+python -m pip install -e '.[hardware,tui]'
+epd dashboard
+```
+
+For a preview-only installation use `python -m pip install -e '.[tui]'`.
+After updating an existing installation, restart the carousel once so it begins
+reporting its display state. Use the same user, configuration, and data-directory
+environment as the service, including the systemd command prefix shown above.
+The dashboard never starts a second renderer.
+
+Mouse clicks and scrolling work in terminals that support mouse reporting,
+including Windows Terminal over SSH. Use `ssh -t` to allocate a terminal.
+An 80-column by 24-row terminal or larger is recommended.
+All operations also have keyboard controls:
+
+| Key | Action |
+| --- | --- |
+| Tab / Shift+Tab | Move between panes and controls. |
+| Arrows | Browse slides or folders. |
+| Enter | Show the highlighted slide when the slide table has focus; otherwise activate the focused control. |
+| Space | Pause or resume automatic rotation when browsing slides. |
+| n / p | Select the next or previous scheduled slide. |
+| s | Apply the browsed folder as the playback scope. |
+| / / Escape | Focus search / return to the slide table. |
+| m / e | Move the highlighted slide / enable or disable it. |
+| r / Delete | Replace a local image / open its delete confirmation. |
+| ? | Show help. |
+| q / Ctrl+Q | Close the dashboard; Ctrl+Q also works while searching. |
+
+Clicking a row or browsing folders does **not** change playback. Click **Show**
+or press Enter in the slide table to request a slide. Click **Scope folder** or
+press `s` to apply the browsed folder; select **All folders** to restore the
+whole-gallery scope. Search and folder browsing filter only the table, which
+includes disabled, expired, and out-of-scope slides for management. Only enabled,
+unexpired slides inside the active playback scope can be shown.
+
+The move dialog offers existing folders or a new nested path; `/` removes the
+folder assignment. Replacement paths refer to files **on the Pi**, not the
+computer running your SSH client. Local deletion requires confirmation. API
+slides can be moved or enabled/disabled, but not replaced or deleted locally.
+API-provided folder assignments may overwrite local moves on refresh.
+
+**Selected** is a request; **Last displayed** is the last image whose display
+driver refresh completed successfully, not physical verification of the panel.
+Preview runs instead report **Preview saved**. A refresh in progress or failure
+is shown separately, and the last successful image remains reported even if it
+is subsequently disabled or deleted. **Unknown** means this catalog has no
+service heartbeat; **Stopped** is reported on clean shutdown. After 90 seconds
+without a heartbeat the dashboard warns that the service may be offline or
+blocked; a very long panel refresh can also cause that warning.
+
+The upcoming list is a **read-only projection** of the folder-balanced scheduler.
+It never advances the carousel's saved selection or folder cursors. It assumes
+current eligibility and scope: expiry, API imports, folder changes, or manual
+controls can change the eventual sequence. Pausing holds timed playback but
+still allows explicit selections. No terminal image preview is rendered.
+
+Closing the dashboard or disconnecting SSH leaves the separately running
+carousel untouched. The dashboard can edit selections while the service is
+stopped; playback waits for that service to start.
 
 ## Add images
 

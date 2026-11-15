@@ -48,6 +48,9 @@ future code pulls update the CLI's source rather than leaving an older installed
 copy. Run commands inside this virtual environment.
 
 Both `epaper-display` and the shorter `epd` executable run the same CLI.
+For the optional terminal control panel, install `'.[hardware,tui]'` instead,
+then run `epd dashboard` from a second terminal using the carousel's same
+configuration and data directory. See [dashboard controls](cli_instructions.md#terminal-dashboard).
 
 ## 3. Display your first image
 

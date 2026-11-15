@@ -37,6 +37,14 @@ class Slide:
     folder: str | None = None
 
 
+@dataclass(frozen=True)
+class CarouselSnapshot:
+    slides: list[Slide]
+    state: dict[str, str]
+    upcoming: list[Slide]
+    folders: list[str]
+
+
 def normalize_folder(folder: str | None) -> str | None:
     if folder is None:
         return None
@@ -354,11 +362,11 @@ class Catalog:
                 rows = self._active_rows(connection, timestamp)
             if scoped:
                 scope = self._state_value(connection, "scope") or ""
-                rows = [row for row in rows if self._in_scope(row["folder"], scope)]
+                rows = [row for row in rows if self.in_scope(row["folder"], scope)]
         return [self._slide_from_row(row) for row in rows]
 
     @staticmethod
-    def _in_scope(folder: str | None, scope: str) -> bool:
+    def in_scope(folder: str | None, scope: str | None) -> bool:
         return not scope or folder == scope or (folder or "").startswith(scope + "/")
 
     @staticmethod
@@ -438,7 +446,7 @@ class Catalog:
                 (slide_id, timestamp),
             ).fetchone()
             scope = self._state_value(connection, "scope") or ""
-            if row and not self._in_scope(row["folder"], scope):
+            if row and not self.in_scope(row["folder"], scope):
                 return None
         return self._slide_from_row(row) if row else None
 
@@ -446,6 +454,42 @@ class Catalog:
         with self._connect() as connection:
             row = connection.execute("SELECT value FROM state WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else None
+
+    def update_runtime_state(self, values: dict[str, str]) -> None:
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO state(key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                values.items(),
+            )
+
+    def snapshot(self, now: float | None = None, queue_limit: int = 5) -> CarouselSnapshot:
+        if queue_limit < 0:
+            raise ValueError("queue_limit must be non-negative")
+        timestamp = now if now is not None else datetime.now().timestamp()
+        with self._connect() as connection:
+            connection.execute("BEGIN")
+            slides = connection.execute("SELECT * FROM slides ORDER BY created_at, id").fetchall()
+            state = {row["key"]: row["value"] for row in connection.execute("SELECT * FROM state")}
+            groups = self._rotation_groups(connection, timestamp)
+            scope = state.get("scope", "")
+            cursors = self._folder_cursors(connection, scope)
+            current_id = state.get("current_slide_id")
+            upcoming: list[Slide] = []
+            if groups:
+                for _ in range(queue_limit):
+                    selected = self._next_from_groups(groups, current_id, cursors, 1)
+                    upcoming.append(self._slide_from_row(selected))
+                    current_id = selected["id"]
+                    group = self._folder_group(selected["folder"] or "", scope)
+                    if group is not None:
+                        cursors[group] = current_id
+        return CarouselSnapshot(
+            slides=[self._slide_from_row(row) for row in slides],
+            state=state, upcoming=upcoming, folders=self._folder_paths(slides),
+        )
 
     def set_paused(self, paused: bool, now: float, interval_seconds: int) -> None:
         with self._connect() as connection:
@@ -498,7 +542,7 @@ class Catalog:
         folders: dict[str, list[sqlite3.Row]] = {}
         for row in self._active_rows(connection, now):
             folder = row["folder"] or ""
-            if not self._in_scope(folder, scope):
+            if not self.in_scope(folder, scope):
                 continue
             group = self._folder_group(folder, scope)
             if group is None:
@@ -515,24 +559,30 @@ class Catalog:
         child = relative.split("/", 1)[0]
         return f"{scope}/{child}" if scope else child
 
+    @staticmethod
     def _choose_from_group(
-        self,
-        connection: sqlite3.Connection,
         group: tuple[str | None, list[sqlite3.Row]],
+        cursors: dict[str, str],
         direction: int = 1,
     ) -> sqlite3.Row:
         folder, slides = group
         if folder is None:
             return slides[0]
-        scope = self._state_value(connection, "scope") or ""
-        cursor = connection.execute(
-            "SELECT slide_id FROM folder_cursors WHERE scope = ? AND folder = ?", (scope, folder)
-        ).fetchone()
+        cursor = cursors.get(folder)
         index = next(
-            (i for i, row in enumerate(slides) if cursor and row["id"] == cursor["slide_id"]),
+            (i for i, row in enumerate(slides) if row["id"] == cursor),
             -1 if direction > 0 else 0,
         )
         return slides[(index + direction) % len(slides)]
+
+    @staticmethod
+    def _folder_cursors(connection: sqlite3.Connection, scope: str) -> dict[str, str]:
+        return {
+            row["folder"]: row["slide_id"]
+            for row in connection.execute(
+                "SELECT folder, slide_id FROM folder_cursors WHERE scope = ?", (scope,)
+            )
+        }
 
     def _write_selection(
         self, connection: sqlite3.Connection, row: sqlite3.Row | None,
@@ -564,7 +614,8 @@ class Catalog:
             (row for _, slides in groups for row in slides if row["id"] == current_id), None
         )
         if current is None and groups:
-            current = self._choose_from_group(connection, groups[0])
+            scope = self._state_value(connection, "scope") or ""
+            current = self._choose_from_group(groups[0], self._folder_cursors(connection, scope))
         self._write_selection(connection, current, now, interval_seconds)
         return current
 
@@ -573,12 +624,22 @@ class Catalog:
         groups: list[tuple[str | None, list[sqlite3.Row]]], direction: int,
     ) -> sqlite3.Row:
         current_id = self._state_value(connection, "current_slide_id")
+        scope = self._state_value(connection, "scope") or ""
+        return self._next_from_groups(
+            groups, current_id, self._folder_cursors(connection, scope), direction
+        )
+
+    @classmethod
+    def _next_from_groups(
+        cls, groups: list[tuple[str | None, list[sqlite3.Row]]],
+        current_id: str | None, cursors: dict[str, str], direction: int,
+    ) -> sqlite3.Row:
         index = next(
             (i for i, (_, slides) in enumerate(groups)
              if any(row["id"] == current_id for row in slides)),
             -1 if direction > 0 else 0,
         )
-        return self._choose_from_group(connection, groups[(index + direction) % len(groups)], direction)
+        return cls._choose_from_group(groups[(index + direction) % len(groups)], cursors, direction)
 
     def _state_value(self, connection: sqlite3.Connection, key: str) -> str | None:
         row = connection.execute("SELECT value FROM state WHERE key = ?", (key,)).fetchone()

@@ -153,6 +153,46 @@ class PickerTests(unittest.TestCase):
             result = main(["--config", str(self.config), "display", "--pick"])
         return result, stdout.getvalue(), stderr.getvalue()
 
+    def test_dashboard_requires_an_interactive_terminal(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output), patch("sys.stdin.isatty", return_value=False):
+            self.assertEqual(main(["--config", str(self.config), "dashboard"]), 2)
+        self.assertIn("ssh -t", output.getvalue())
+
+    def test_dashboard_lazy_launch_does_not_start_a_renderer(self) -> None:
+        dashboard = Mock()
+        with (
+            patch.dict("sys.modules", {"epaper_display.dashboard": dashboard}),
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
+            patch("epaper_display.cli._run_service") as service,
+        ):
+            self.assertEqual(main(["--config", str(self.config), "dashboard"]), 0)
+        dashboard.run_dashboard.assert_called_once()
+        config, catalog, sources = dashboard.run_dashboard.call_args.args
+        self.assertEqual(config.data_dir, self.root / "state")
+        self.assertEqual(catalog.database_path, self.catalog.database_path)
+        self.assertIsInstance(sources, ApiSourceRegistry)
+        service.assert_not_called()
+
+    def test_dashboard_missing_extra_reports_installation_command(self) -> None:
+        original_import = __import__
+
+        def without_dashboard(name, *args, **kwargs):
+            if name == "epaper_display.dashboard":
+                raise ModuleNotFoundError("No module named 'textual'", name="textual")
+            return original_import(name, *args, **kwargs)
+
+        output = io.StringIO()
+        with (
+            patch("builtins.__import__", side_effect=without_dashboard),
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
+            contextlib.redirect_stderr(output),
+        ):
+            self.assertEqual(main(["--config", str(self.config), "dashboard"]), 2)
+        self.assertIn(".[tui]", output.getvalue())
+
     def test_replace_and_delete_local_slide_commands(self) -> None:
         slide = self.catalog.add_image(self.image, "Original")
         replacement = self.root / "replacement.png"

@@ -19,9 +19,11 @@ flowchart LR
     direction TB
     SSH[SSH client]
     CLI["SSH CLI<br/>cli.py"]
+    Dashboard["Optional terminal dashboard<br/>dashboard.py"]
     APIs["External JSON feeds and image endpoints"]
     APIClient["External API adapter<br/>api_client.py"]
     SSH --> CLI
+    CLI --> Dashboard
     APIs <--> APIClient
   end
 
@@ -35,6 +37,8 @@ flowchart LR
     DisplayService["Display service and adapters<br/>display.py"]
     CLI --> Registry
     CLI --> Catalog
+    Dashboard --> Catalog
+    Dashboard --> Registry
     CLI --> Refresh
     Refresh --> Registry
     Refresh --> APIClient
@@ -71,6 +75,12 @@ flowchart LR
   configured query parameters and response-field mappings, reads credentials
   from environment variables, downloads direct or JSON-referenced images, and imports them
   into the catalog. It does not own the refresh schedule or carousel state.
+- **Terminal dashboard (`dashboard.py`)** is an optional Textual control process,
+  launched lazily by `epd dashboard`. It polls read-only catalog snapshots,
+  projects upcoming selections, and invokes the same catalog actions as the
+  CLI. Browsing/search never changes playback; showing slides and applying scope
+  are explicit actions. Keyboard and mouse controls do not access the display
+  adapter, launch a carousel, or stop the service on exit.
 - **External JSON feeds and image endpoints** are slide providers, not runtime dependencies of
   slide playback. An API outage leaves the already downloaded gallery
   available.
@@ -91,11 +101,13 @@ flowchart LR
   block display updates.
 - **Slide catalog (`catalog.py`)** validates and stores local image files,
   slide metadata, logical folder paths, expiration, playback scope, folder
-  rotation cursors, and carousel selection/deadline state. It
+  rotation cursors, carousel selection/deadline state, and service-reported
+  heartbeat/display state. It
   provides the scheduler with eligible slides without contacting APIs.
 - **Carousel scheduler (`service.py`)** restores the selected slide after
   restart, advances it on the configured interval, and notices manual CLI
-  selection. It delegates rendering and display output.
+  selection. It delegates rendering and display output, reporting the rendering
+  slide separately from the last successful display refresh.
 - **Image renderer (`render.py`)** fits gallery images to the panel's native
   resolution and applies portrait orientation and rotation.
 - **Display service and adapters (`display.py`)** prepare a slide using the
@@ -121,7 +133,7 @@ microSD card:
   environment-variable name is.
 - `catalog.sqlite3` stores slide/image metadata, per-slide enabled state,
   nullable logical folder membership, playback scope, per-scope folder cursors,
-  carousel selection, rotation pause state, and the next slide transition
+  carousel selection, rotation pause state, service-reported display state, and the next slide transition
   deadline. It does not store API source configuration
   or refresh state.
 - `gallery/` stores the downloaded or SSH-uploaded image files referenced by
@@ -135,8 +147,23 @@ transitions missed while powered off.
 While paused, timed transitions are suppressed and no transition deadline is
 scheduled; manual selection and API refreshes remain available. Resuming starts
 a fresh interval.
+The existing key/value `state` table also stores a heartbeat (at most once every
+five idle seconds), clean shutdown state, current rendering ID, last successful
+display ID/title/revision/time, output target (panel or preview), and latest
+display error. These keys require no new schema migration. A failed refresh
+does not replace the last successful result; an empty scope does not clear
+knowledge of the image left on the panel. Reporting is not physical panel
+verification. A missing heartbeat is unknown; one older than 90 seconds is
+potentially offline or blocked, including a long synchronous panel refresh.
 Source TTL deadlines persist separately, so a restart does not cause every
 source to be fetched immediately.
+
+`Catalog.snapshot()` reads slides, folders, state, and the upcoming projection
+within one SQLite read transaction. Projection and live scheduling share the
+same group chooser; projection advances only an in-memory copy of folder
+cursors. It does not initialize a selection or change deadlines, scope, pause,
+or persisted cursors. Future eligibility or metadata changes can alter the
+projected sequence.
 
 ### Folder-aware playback
 

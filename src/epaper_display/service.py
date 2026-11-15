@@ -6,7 +6,7 @@ import time
 
 from epaper_display.catalog import Catalog
 from epaper_display.config import AppConfig
-from epaper_display.display import Display, show_slide
+from epaper_display.display import Display, PreviewDisplay, show_slide
 from epaper_display.refresh_worker import refresh_due_sources
 from epaper_display.source_registry import ApiSourceRegistry
 from epaper_display.telemetry import Telemetry
@@ -37,12 +37,18 @@ class CarouselService:
         self._failed_slide_id: str | None = None
         self._failed_slide_revision: str | None = None
         self._retry_after = 0.0
+        self._heartbeat_at = 0.0
 
     def stop(self) -> None:
         self._stop.set()
 
     def tick(self, now: float | None = None) -> None:
         timestamp = now if now is not None else time.time()
+        if timestamp - self._heartbeat_at >= 5:
+            self.catalog.update_runtime_state({
+                "service_status": "running", "service_heartbeat_at": str(timestamp),
+            })
+            self._heartbeat_at = timestamp
         self.catalog.advance_if_due(timestamp, self.config.interval_seconds)
         current_id = self.catalog.get_state("current_slide_id")
         if not current_id:
@@ -69,6 +75,12 @@ class CarouselService:
         ):
             return
         started = time.monotonic()
+        self.catalog.update_runtime_state({
+            "service_status": "running",
+            "service_heartbeat_at": str(timestamp),
+            "rendering_slide_id": slide.id,
+            "display_target": "preview" if isinstance(self.display, PreviewDisplay) else "panel",
+        })
         try:
             show_slide(
                 self.display,
@@ -76,7 +88,12 @@ class CarouselService:
                 self.config.display_orientation,
                 self.config.portrait_rotation_degrees,
             )
-        except Exception:
+        except Exception as exc:
+            self.catalog.update_runtime_state({
+                "service_heartbeat_at": str(timestamp if now is not None else time.time()),
+                "rendering_slide_id": "",
+                "display_error": f"{type(exc).__name__}: {exc}"[:500],
+            })
             if self.telemetry:
                 self.telemetry.display_refresh(False, time.monotonic() - started)
             self._failed_slide_id = slide.id
@@ -86,6 +103,15 @@ class CarouselService:
             return
         if self.telemetry:
             self.telemetry.display_refresh(True, time.monotonic() - started)
+        self.catalog.update_runtime_state({
+            "service_heartbeat_at": str(timestamp if now is not None else time.time()),
+            "displayed_slide_id": slide.id,
+            "displayed_slide_title": slide.title,
+            "displayed_slide_revision": revision or "",
+            "displayed_at": str(timestamp if now is not None else time.time()),
+            "rendering_slide_id": "",
+            "display_error": "",
+        })
         self._last_rendered_id = slide.id
         self._last_rendered_revision = revision
         self._failed_slide_id = None
@@ -108,6 +134,10 @@ class CarouselService:
         worker.start()
         logger.info("Carousel service started")
         try:
+            self.catalog.update_runtime_state({
+                "service_status": "running", "rendering_slide_id": "", "display_error": "",
+                "service_heartbeat_at": str(time.time()),
+            })
             while not self._stop.is_set():
                 self.tick()
                 self._stop.wait(self.poll_seconds)
@@ -116,3 +146,7 @@ class CarouselService:
             worker.join(timeout=5)
             if worker.is_alive():
                 logger.warning("Source refresh worker did not stop within 5 seconds")
+            self.catalog.update_runtime_state({
+                "service_status": "stopped", "rendering_slide_id": "",
+                "service_heartbeat_at": str(time.time()),
+            })

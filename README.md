@@ -13,12 +13,13 @@ background without interrupting the carousel.
 - Displays portrait artwork on a 1200 x 1600 logical canvas.
 - Rotates slides every 30 minutes by default, with persistent pause and resume.
 - Supports manual selection and gallery management over SSH.
+- Offers an optional mouse- and keyboard-driven terminal dashboard (`epd dashboard`).
 - Groups slides into nested folders with folder-balanced, scoped playback.
 - Keeps slide images, metadata, and API source settings across reboots.
 - Offers a desktop preview mode and opt-in experimental fast panel refresh.
 
 The project is written in Python and uses Pillow for image preparation,
-Questionary for interactive menus, SQLite for metadata, and Pimoroni's Inky
+Questionary for interactive menus, optional Textual for the dashboard, SQLite for metadata, and Pimoroni's Inky
 driver for the physical display. Example artwork includes Microsoft, GitHub,
 and a Philadelphia-themed slide.
 

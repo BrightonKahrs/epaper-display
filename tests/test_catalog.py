@@ -28,6 +28,47 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue(slide.path.is_file())
         self.assertEqual(slide.title, "Red test")
 
+    def test_queue_projection_matches_folder_scheduler_without_writing_state(self) -> None:
+        for index, folder in enumerate((None, None, "space", "space/planets/moons", "travel")):
+            self.catalog.add_image(self.image_path, str(index), folder=folder, now=100 + index)
+        disabled = self.catalog.add_image(self.image_path, folder="space", now=106)
+        self.catalog.set_enabled(disabled.id, False)
+        self.catalog.add_image(self.image_path, folder="travel", expires_at=150, now=107)
+        for scope in (None, "space", "space/planets"):
+            with self.subTest(scope=scope):
+                self.catalog.set_scope(scope, now=200, interval_seconds=1800)
+                self.catalog.set_paused(True, now=200, interval_seconds=1800)
+                with closing(sqlite3.connect(self.catalog.database_path)) as connection:
+                    before = list(connection.iterdump())
+                projected = self.catalog.snapshot(now=201, queue_limit=12)
+                self.assertEqual(projected, self.catalog.snapshot(now=201, queue_limit=12))
+                with closing(sqlite3.connect(self.catalog.database_path)) as connection:
+                    self.assertEqual(before, list(connection.iterdump()))
+                actual = [
+                    self.catalog.advance(1, now=201, interval_seconds=1800).id
+                    for _ in range(12)
+                ]
+                self.assertEqual([slide.id for slide in projected.upcoming], actual)
+                self.assertNotIn(disabled.id, actual)
+                self.assertEqual(len(projected.slides), 7)
+                self.assertIn("space/planets", projected.folders)
+
+    def test_projection_handles_uninitialized_selection_and_empty_scope(self) -> None:
+        self.assertEqual(self.catalog.snapshot(now=100).upcoming, [])
+        first = self.catalog.add_image(self.image_path, folder="space/moons", now=100)
+        self.catalog.add_image(self.image_path, folder="space", now=101)
+        projected = self.catalog.snapshot(now=102)
+        self.assertIsNone(self.catalog.get_state("current_slide_id"))
+        self.assertEqual(
+            projected.upcoming[0].id,
+            self.catalog.initialize_carousel(now=102, interval_seconds=1800).id,
+        )
+        self.catalog.set_scope("space/moons", now=103, interval_seconds=1800)
+        self.catalog.set_enabled(first.id, False)
+        self.assertEqual(self.catalog.snapshot(now=104).upcoming, [])
+        with self.assertRaisesRegex(ValueError, "queue_limit"):
+            self.catalog.snapshot(queue_limit=-1)
+
     def test_external_refresh_updates_existing_slide(self) -> None:
         first = self.catalog.add_image(
             self.image_path, "First", source="api:weather", external_id="today", now=100
