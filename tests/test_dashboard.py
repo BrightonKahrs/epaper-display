@@ -42,7 +42,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
     def dashboard(self) -> Dashboard:
         return Dashboard(self.config, self.catalog, self.sources)
 
-    async def test_mouse_browsing_does_not_select_until_explicit_show_and_keyboard_controls_work(self) -> None:
+    async def test_mouse_browsing_does_not_select_until_explicit_display_and_keyboard_controls_work(self) -> None:
         app = self.dashboard()
         async with app.run_test(size=(120, 36)) as pilot:
             await pilot.click("#slides", offset=(2, 3))
@@ -59,6 +59,39 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.catalog.get_state("current_slide_id"), self.second.id)
             await pilot.click("#pause")
             self.assertEqual(self.catalog.get_state("rotation_paused"), "0")
+
+    async def test_double_click_displays_clicked_slide_and_display_button_works(self) -> None:
+        app = self.dashboard()
+        async with app.run_test(size=(80, 24)) as pilot:
+            self.assertEqual(str(app.query_one("#display", Button).label), "Display")
+            await pilot.click("#slides", offset=(2, 3), times=2)
+            self.assertEqual(self.catalog.get_state("current_slide_id"), self.second.id)
+            self.assertIsNone(self.catalog.get_state("displayed_slide_id"))
+            await pilot.click("#slides", offset=(2, 2))
+            self.assertEqual(self.catalog.get_state("current_slide_id"), self.second.id)
+            await pilot.click("#display")
+            self.assertEqual(self.catalog.get_state("current_slide_id"), self.first.id)
+
+    async def test_double_click_header_and_empty_area_does_not_display_highlighted_slide(self) -> None:
+        app = self.dashboard()
+        async with app.run_test(size=(120, 36)) as pilot:
+            await pilot.click("#slides", offset=(2, 3))
+            await pilot.click("#slides", offset=(2, 1), times=2)
+            await pilot.click("#slides", offset=(2, 7), times=2)
+            self.assertEqual(self.catalog.get_state("current_slide_id"), self.first.id)
+
+    async def test_double_click_respects_disabled_expired_and_scope_eligibility(self) -> None:
+        self.catalog.set_enabled(self.second.id, False)
+        self.catalog.add_image(self.image, "Expired", expires_at=150, now=103)
+        self.catalog.set_scope("weather", time.time(), 1800)
+        app = self.dashboard()
+        async with app.run_test(size=(120, 36)) as pilot:
+            with patch.object(app, "notify", wraps=app.notify) as notify:
+                for row in (2, 3, 5):
+                    await pilot.click("#slides", offset=(2, row), times=2)
+                    self.assertEqual(self.catalog.get_state("current_slide_id"), self.api.id)
+                errors = [call for call in notify.call_args_list if call.kwargs.get("title") == "Action failed"]
+                self.assertEqual(len(errors), 3)
 
     async def test_folder_browsing_search_and_scope_are_independent(self) -> None:
         app = self.dashboard()
@@ -77,7 +110,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             app.query_one("#slides", DataTable).focus()
             await pilot.press("slash", *"weather")
             self.assertEqual([slide.id for slide in app._visible_slides], [self.api.id])
-            self.assertTrue(app.query_one("#show", Button).disabled)
+            self.assertTrue(app.query_one("#display", Button).disabled)
             self.assertEqual(self.catalog.get_scope(), "space")
             await pilot.press("escape", "s")
             self.assertIsNone(self.catalog.get_scope())
@@ -87,7 +120,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
     async def test_move_enable_and_cancel_are_safe_in_a_small_terminal(self) -> None:
         app = self.dashboard()
         async with app.run_test(size=(80, 24)) as pilot:
-            for name in ("show", "slides", "apply-scope", "move", "delete"):
+            for name in ("display", "slides", "apply-scope", "move", "delete"):
                 region = app.query_one(f"#{name}").region
                 self.assertGreater(region.height, 0)
                 self.assertLessEqual(region.bottom, 24)
@@ -121,7 +154,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app.query_one("#slides", DataTable).row_count, 0)
             self.assertIsNone(app._selected())
-            self.assertTrue(app.query_one("#show", Button).disabled)
+            self.assertTrue(app.query_one("#display", Button).disabled)
             app.query_one("#search", Input).value = ""
             await pilot.pause()
             self.assertEqual(app._selected_id, self.api.id)
@@ -209,7 +242,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Stopped", str(app.query_one("#playback", Static).render()))
             self.assertIn("No eligible slides", str(app.query_one("#queue", Static).render()))
             self.assertTrue(app.query_one("#next", Button).disabled)
-            self.assertTrue(app.query_one("#show", Button).disabled)
+            self.assertTrue(app.query_one("#display", Button).disabled)
 
 
 if __name__ == "__main__":

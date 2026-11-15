@@ -90,7 +90,7 @@ All operations also have keyboard controls:
 | --- | --- |
 | Tab / Shift+Tab | Move between panes and controls. |
 | Arrows | Browse slides or folders. |
-| Enter | Show the highlighted slide when the slide table has focus; otherwise activate the focused control. |
+| Enter | Display the highlighted slide when the slide table has focus; otherwise activate the focused control. |
 | Space | Pause or resume automatic rotation when browsing slides. |
 | n / p | Select the next or previous scheduled slide. |
 | s | Apply the browsed folder as the playback scope. |
@@ -100,8 +100,10 @@ All operations also have keyboard controls:
 | ? | Show help. |
 | q / Ctrl+Q | Close the dashboard; Ctrl+Q also works while searching. |
 
-Clicking a row or browsing folders does **not** change playback. Click **Show**
-or press Enter in the slide table to request a slide. Click **Scope folder** or
+Single-clicking a row or browsing folders does **not** change playback.
+Double-click a slide, click **Display**, or press Enter in the slide table to
+request that slide. Disabled, expired, and out-of-scope slides remain ineligible.
+Click **Scope folder** or
 press `s` to apply the browsed folder; select **All folders** to restore the
 whole-gallery scope. Search and folder browsing filter only the table, which
 includes disabled, expired, and out-of-scope slides for management. Only enabled,

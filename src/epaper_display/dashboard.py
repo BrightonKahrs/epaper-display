@@ -6,10 +6,11 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from textual import on
+from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Select, Static, Tree
 from textual.widgets.tree import TreeNode
@@ -18,6 +19,23 @@ from rich.text import Text
 from epaper_display.catalog import CarouselSnapshot, Catalog, Slide
 from epaper_display.config import AppConfig
 from epaper_display.source_registry import ApiSourceRegistry
+
+
+class SlideTable(DataTable):
+    class DisplayRequested(Message):
+        def __init__(self, slide_id: str) -> None:
+            super().__init__()
+            self.slide_id = slide_id
+
+    def on_click(self, event: events.Click) -> None:
+        if event.button != 1 or event.chain != 2:
+            return
+        row = event.style.meta.get("row", -1)
+        column = event.style.meta.get("column", -1)
+        if 0 <= row < self.row_count and column >= 0:
+            slide_id = self.ordered_rows[row].key.value
+            if slide_id is not None:
+                self.post_message(self.DisplayRequested(slide_id))
 
 
 class ValueDialog(ModalScreen[str | None]):
@@ -127,7 +145,7 @@ class Dashboard(App[None]):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("ctrl+q", "close_dashboard", show=False, priority=True),
-        Binding("enter", "show_slide", "Show", priority=True),
+        Binding("enter", "display_slide", "Display", priority=True),
         Binding("space", "pause", "Pause/resume"),
         Binding("n", "next_slide", "Next"),
         Binding("p", "previous_slide", "Previous", show=False),
@@ -158,7 +176,7 @@ class Dashboard(App[None]):
         yield Header()
         yield Static("Loading carousel state...", id="playback", markup=False)
         with Horizontal(id="controls"):
-            yield Button("Show", variant="primary", id="show")
+            yield Button("Display", variant="primary", id="display")
             yield Button("Previous", id="previous")
             yield Button("Next", id="next")
             yield Button("Pause", id="pause")
@@ -173,7 +191,7 @@ class Dashboard(App[None]):
                 yield Button("Scope folder", id="apply-scope", tooltip="Use the browsed folder for playback")
             with Vertical(id="slides-pane"):
                 yield Input(placeholder="Search slides, folders, sources or IDs", id="search")
-                yield DataTable(id="slides", cursor_type="row", zebra_stripes=True)
+                yield SlideTable(id="slides", cursor_type="row", zebra_stripes=True)
                 yield Static(id="queue", markup=False)
         yield Static(id="details", markup=False)
         yield Static(id="sources", markup=False)
@@ -193,7 +211,7 @@ class Dashboard(App[None]):
             return False
         if isinstance(self.focused, Input):
             return action in ("browse", "close_dashboard")
-        if action == "show_slide":
+        if action == "display_slide":
             return isinstance(self.focused, DataTable)
         return True
 
@@ -331,7 +349,7 @@ class Dashboard(App[None]):
         elif not self._snapshot.slides:
             lines.append("Gallery empty. Add an image with epd add <path> in another terminal.")
         else:
-            lines.append("Browse freely; Show changes playback. Scope folder changes the active scope.")
+            lines.append("Browse freely; Display changes playback. Scope folder changes the active scope.")
         self.query_one("#playback", Static).update(
             Text("\n".join(lines), overflow="ellipsis", no_wrap=True)
         )
@@ -364,7 +382,7 @@ class Dashboard(App[None]):
         for name in ("move", "toggle"):
             self.query_one(f"#{name}", Button).disabled = slide is None
         self.query_one("#toggle", Button).label = "Disable" if slide and slide.enabled else "Enable"
-        self.query_one("#show", Button).disabled = not (
+        self.query_one("#display", Button).disabled = not (
             slide and slide.enabled
             and (slide.expires_at is None or slide.expires_at > time.time())
             and Catalog.in_scope(slide.folder, self._snapshot.state.get("scope", ""))
@@ -388,10 +406,15 @@ class Dashboard(App[None]):
         self._selected_id = event.row_key.value
         self._refresh_details()
 
+    @on(SlideTable.DisplayRequested)
+    async def display_clicked_slide(self, event: SlideTable.DisplayRequested) -> None:
+        self._selected_id = event.slide_id
+        await self.action_display_slide()
+
     @on(Button.Pressed)
     async def button(self, event: Button.Pressed) -> None:
         actions = {
-            "show": self.action_show_slide, "next": self.action_next_slide,
+            "display": self.action_display_slide, "next": self.action_next_slide,
             "previous": self.action_previous_slide, "pause": self.action_pause,
             "apply-scope": self.action_scope, "move": self.action_move_slide,
             "toggle": self.action_toggle_slide, "replace": self.action_replace_slide,
@@ -411,7 +434,7 @@ class Dashboard(App[None]):
             self.notify(success, timeout=3)
         self.refresh_data()
 
-    async def action_show_slide(self) -> None:
+    async def action_display_slide(self) -> None:
         slide = self._selected()
         if slide:
             await self._perform(
@@ -508,7 +531,7 @@ class Dashboard(App[None]):
 
     def action_help(self) -> None:
         self.notify(
-            "Click a row or use arrows to browse; Enter/Show selects it. "
+            "Click a row or use arrows to browse; Enter/Display or double-click displays it. "
             "Space: pause/resume; n/p: next/previous; /: search; s: scope browsed folder; "
             "m: move; e: enable/disable; r: replace; Delete: delete; Tab: change pane; q: quit. "
             "Upcoming assumes current eligibility. Last displayed means last successful driver refresh. "
