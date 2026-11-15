@@ -111,6 +111,58 @@ class DeleteDialog(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class AddDialog(ModalScreen[Slide | None]):
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, catalog: Catalog, folder: str | None) -> None:
+        super().__init__()
+        self.catalog = catalog
+        self.folder = folder
+        self._adding = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog"):
+            yield Static("Add slide", classes="dialog-title")
+            yield Static("Image path on the Pi")
+            yield Input(placeholder="/tmp/venus.png", id="add-image")
+            yield Static("Carousel folder (blank or / means unfiled)")
+            yield Input(value=self.folder or "", placeholder="space/planets", id="add-folder")
+            yield Static("", id="add-error", markup=False)
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Cancel", id="add-cancel")
+                yield Button("Add", variant="primary", id="add-confirm")
+
+    def on_mount(self) -> None:
+        self.query_one("#add-image", Input).focus()
+
+    @on(Input.Submitted)
+    @on(Button.Pressed, "#add-confirm")
+    async def submit(self) -> None:
+        if self._adding:
+            return
+        image = self.query_one("#add-image", Input).value.strip()
+        if not image:
+            self.query_one("#add-error", Static).update("Enter an image path on the Pi.")
+            return
+        folder = self.query_one("#add-folder", Input).value
+        self._adding = True
+        self.query_one("#add-confirm", Button).disabled = True
+        try:
+            slide = await asyncio.to_thread(self.catalog.add_image, Path(image), folder=folder)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            self.query_one("#add-error", Static).update(Text(f"Could not add slide: {exc}"))
+        else:
+            self.dismiss(slide)
+        finally:
+            self._adding = False
+            self.query_one("#add-confirm", Button).disabled = False
+
+    @on(Button.Pressed, "#add-cancel")
+    def action_cancel(self) -> None:
+        if not self._adding:
+            self.dismiss(None)
+
+
 class Dashboard(App[None]):
     """An SSH control surface; the separate carousel remains the only renderer."""
 
@@ -136,6 +188,7 @@ class Dashboard(App[None]):
     Screen.compact #details { display: none; }
     Screen.compact Button { min-width: 8; width: 8; padding: 0; margin: 0; border: none; }
     Screen.compact Button:focus { text-style: bold underline; }
+    Screen.compact #controls #add { min-width: 6; width: 6; }
     ModalScreen { align: center middle; background: $background 80%; }
     .dialog { width: 66; max-width: 95%; height: auto; padding: 1 2; border: thick $accent; background: $surface; }
     .dialog-title { text-style: bold; margin-bottom: 1; }
@@ -150,6 +203,7 @@ class Dashboard(App[None]):
         Binding("n", "next_slide", "Next"),
         Binding("p", "previous_slide", "Previous", show=False),
         Binding("s", "scope", "Scope"),
+        Binding("a", "add_slide", "Add"),
         Binding("m", "move_slide", "Move", show=False),
         Binding("e", "toggle_slide", "Enable/disable", show=False),
         Binding("r", "replace_slide", "Replace", show=False),
@@ -180,6 +234,7 @@ class Dashboard(App[None]):
             yield Button("Previous", id="previous")
             yield Button("Next", id="next")
             yield Button("Pause", id="pause")
+            yield Button("Add", id="add")
             yield Button("Move", id="move")
             yield Button("Disable", id="toggle")
             yield Button("Replace", id="replace")
@@ -419,6 +474,7 @@ class Dashboard(App[None]):
             "apply-scope": self.action_scope, "move": self.action_move_slide,
             "toggle": self.action_toggle_slide, "replace": self.action_replace_slide,
             "delete": self.action_delete_slide,
+            "add": self.action_add_slide,
         }
         if event.button.id == "help":
             self.action_help()
@@ -489,6 +545,14 @@ class Dashboard(App[None]):
             slide.folder or "/", folders,
         ), apply)
 
+    async def action_add_slide(self) -> None:
+        def added(slide: Slide | None) -> None:
+            self.refresh_data()
+            if slide is not None:
+                self.notify(f"Added {slide.title} to {slide.folder or '/'}.", timeout=5)
+
+        self.push_screen(AddDialog(self.catalog, self._browse_folder), added)
+
     async def action_replace_slide(self) -> None:
         slide = self._selected()
         if slide is None:
@@ -533,7 +597,7 @@ class Dashboard(App[None]):
         self.notify(
             "Click a row or use arrows to browse; Enter/Display or double-click displays it. "
             "Space: pause/resume; n/p: next/previous; /: search; s: scope browsed folder; "
-            "m: move; e: enable/disable; r: replace; Delete: delete; Tab: change pane; q: quit. "
+            "a: add; m: move; e: enable/disable; r: replace; Delete: delete; Tab: change pane; q: quit. "
             "Upcoming assumes current eligibility. Last displayed means last successful driver refresh. "
             "Closing the dashboard does not stop the carousel.",
             title="Dashboard controls", timeout=20,

@@ -94,6 +94,7 @@ All operations also have keyboard controls:
 | Space | Pause or resume automatic rotation when browsing slides. |
 | n / p | Select the next or previous scheduled slide. |
 | s | Apply the browsed folder as the playback scope. |
+| a | Add an image, with an optional carousel folder path. |
 | / / Escape | Focus search / return to the slide table. |
 | m / e | Move the highlighted slide / enable or disable it. |
 | r / Delete | Replace a local image / open its delete confirmation. |
@@ -108,6 +109,12 @@ press `s` to apply the browsed folder; select **All folders** to restore the
 whole-gallery scope. Search and folder browsing filter only the table, which
 includes disabled, expired, and out-of-scope slides for management. Only enabled,
 unexpired slides inside the active playback scope can be shown.
+
+Click **Add** or press `a` to import an image from a path on the Pi. The dialog
+includes a folder field, initially set to the browsed folder; enter any existing
+or new nested path, or leave it blank (or `/`) for an unfiled slide. Adding does
+not explicitly change playback or scope. Search and folder filters still apply
+to the new entry. Invalid paths or images leave the dialog open for correction.
 
 The move dialog offers existing folders or a new nested path; `/` removes the
 folder assignment. Replacement paths refer to files **on the Pi**, not the

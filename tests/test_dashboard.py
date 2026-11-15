@@ -42,6 +42,64 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
     def dashboard(self) -> Dashboard:
         return Dashboard(self.config, self.catalog, self.sources)
 
+    async def test_add_button_imports_to_entered_folder_without_changing_playback(self) -> None:
+        app = self.dashboard()
+        before = self.catalog.snapshot().state
+        async with app.run_test(size=(80, 24)) as pilot:
+            for button in app.query("#controls Button"):
+                self.assertLessEqual(button.region.right, 80)
+            await pilot.click("#add")
+            app.screen.query_one("#add-image", Input).value = str(self.image)
+            app.screen.query_one("#add-folder", Input).value = "space/new/moons"
+            await pilot.click("#add-confirm")
+            await pilot.pause()
+            self.assertNotIsInstance(app.screen, ModalScreen)
+            slides = self.catalog.list_slides()
+            self.assertEqual(len(slides), 4)
+            self.assertEqual(slides[-1].folder, "space/new/moons")
+            self.assertIn("space/new", self.catalog.list_folders())
+            self.assertEqual(self.catalog.snapshot().state, before)
+
+    async def test_add_keyboard_defaults_to_browsed_folder_and_allows_unfiled(self) -> None:
+        app = self.dashboard()
+        async with app.run_test(size=(80, 24)) as pilot:
+            tree = app.query_one("#folders", Tree)
+            tree.select_node(next(node for node in tree.root.children if node.data == "space"))
+            await pilot.pause()
+            app.query_one("#slides", DataTable).focus()
+            await pilot.press("a")
+            self.assertEqual(app.screen.query_one("#add-folder", Input).value, "space")
+            app.screen.query_one("#add-image", Input).value = str(self.image)
+            app.screen.query_one("#add-folder", Input).value = ""
+            await pilot.press("enter")
+            self.assertEqual(len(self.catalog.list_slides()), 4)
+            self.assertIsNone(self.catalog.list_slides()[-1].folder)
+
+    async def test_add_in_empty_gallery_errors_keep_inputs_and_cancel_does_not_import(self) -> None:
+        self.catalog.delete_slide(self.first.id)
+        self.catalog.delete_slide(self.second.id)
+        self.catalog.set_enabled(self.api.id, False)
+        app = self.dashboard()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.click("#add")
+            await pilot.press("enter")
+            self.assertIn("Enter an image path", str(app.screen.query_one("#add-error", Static).render()))
+            app.screen.query_one("#add-image", Input).value = str(self.root / "missing.png")
+            await pilot.press("enter")
+            self.assertIsInstance(app.screen, ModalScreen)
+            self.assertIn("Could not add slide", str(app.screen.query_one("#add-error", Static).render()))
+            app.screen.query_one("#add-image", Input).value = str(self.image)
+            app.screen.query_one("#add-folder", Input).value = "../invalid"
+            await pilot.press("enter")
+            self.assertIsInstance(app.screen, ModalScreen)
+            self.assertEqual(app.screen.query_one("#add-image", Input).value, str(self.image))
+            await pilot.press("escape")
+            self.assertEqual(self.catalog.list_slides(), [])
+            await pilot.click("#add")
+            app.screen.query_one("#add-image", Input).value = str(self.image)
+            await pilot.click("#add-confirm")
+            self.assertEqual(len(self.catalog.list_slides()), 1)
+
     async def test_mouse_browsing_does_not_select_until_explicit_display_and_keyboard_controls_work(self) -> None:
         app = self.dashboard()
         async with app.run_test(size=(120, 36)) as pilot:
