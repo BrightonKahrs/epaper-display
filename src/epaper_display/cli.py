@@ -46,6 +46,17 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("images", nargs="+", type=Path)
     add.add_argument("--folder", help="Logical folder path, such as space/planets (default: root).")
 
+    bulk = commands.add_parser("bulk-add", help="Import images from a ZIP file or directory.")
+    bulk.add_argument("source", type=Path, help="ZIP file or directory on the Pi, such as /tmp/epaper.zip.")
+    bulk.add_argument(
+        "--preserve-folders", action="store_true",
+        help="Use image parent paths as carousel folders (default: all unfiled).",
+    )
+    root = bulk.add_mutually_exclusive_group()
+    root.add_argument("--ignore-root", action="store_true", help="Drop the enclosing folder; requires --preserve-folders.")
+    root.add_argument("--include-root", dest="ignore_root", action="store_false", help="Keep the enclosing folder (default).")
+    bulk.set_defaults(ignore_root=False)
+
     list_command = commands.add_parser("list", help="List active slides.")
     list_command.add_argument(
         "--all", action="store_true", help="Include disabled and expired slides."
@@ -273,6 +284,18 @@ def main(argv: list[str] | None = None) -> int:
             for image in args.images:
                 slide = catalog.add_image(image, folder=args.folder)
                 print(f"{slide.id}\t{slide.title}")
+            return 0
+        if args.command == "bulk-add":
+            from epaper_display.bulk_import import bulk_add
+
+            count = 0
+            for slide in bulk_add(
+                catalog, args.source,
+                preserve_folders=args.preserve_folders, ignore_root=args.ignore_root,
+            ):
+                print(f"{slide.id}\t{slide.title}\t{slide.folder or '/'}")
+                count += 1
+            print(f"Imported {count} image(s).")
             return 0
         if args.command == "list":
             for slide in catalog.list_slides(now, include_all=args.all, scoped=args.scoped):

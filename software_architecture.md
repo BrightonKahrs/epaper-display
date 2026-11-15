@@ -71,6 +71,13 @@ flowchart LR
   triggering refreshes, and managing API
   source specifications. It calls the registry or catalog directly and does
   not implement persistence itself.
+- **Bulk importer (`bulk_import.py`)** accepts local ZIP files or directories,
+  preflights paths and size limits, and imports supported images sequentially
+  through the catalog. Optional folder preservation maps parent paths to
+  carousel metadata, with the enclosing root included by default or explicitly
+  ignored. ZIP extraction uses one temporary image at a time, never archive
+  paths as extraction destinations. Source files remain untouched; failures
+  report any already completed imports instead of implying batch atomicity.
 - **External API adapter (`api_client.py`)** issues bounded HTTP requests, applies
   configured query parameters and response-field mappings, reads credentials
   from environment variables, downloads direct or JSON-referenced images, and imports them

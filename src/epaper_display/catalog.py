@@ -23,6 +23,7 @@ _IMAGE_EXTENSIONS = {
     "GIF": ".gif",
     "TIFF": ".tiff",
 }
+SUPPORTED_IMAGE_SUFFIXES = frozenset(_IMAGE_EXTENSIONS.values()) | {".jpeg", ".tif"}
 
 
 @dataclass(frozen=True)

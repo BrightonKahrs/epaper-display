@@ -162,6 +162,60 @@ scp "C:\Users\YourName\Downloads\my-slide.png" pi@raspberrypi.local:/tmp/my-slid
 Then run `epaper-display add /tmp/my-slide.png` on the Pi. If the hostname does
 not resolve, use the Pi's current IP address.
 
+## Bulk import ZIP files or directories
+
+Upload a ZIP to the Pi with `scp`, then import it directly without manually
+unzipping:
+
+```powershell
+scp "C:\Users\YourName\Downloads\epaper.zip" pi@raspberrypi.local:/tmp/epaper.zip
+```
+
+In the Pi terminal, using the carousel's same configuration and data directory:
+
+```sh
+epd bulk-add /tmp/epaper.zip
+epd bulk-add /tmp/epaper.zip --preserve-folders
+epd bulk-add /tmp/epaper.zip --preserve-folders --ignore-root
+epd bulk-add /tmp/epaper-zip --preserve-folders --ignore-root
+```
+
+`bulk-add` recursively imports supported PNG, JPEG, WebP, BMP, GIF, and TIFF
+images from a ZIP or an existing directory. Without `--preserve-folders`, all
+imported slides are unfiled. With it, image parent paths become logical carousel
+folders. The enclosing root folder is **included by default**; `--include-root`
+also makes this explicit. `--ignore-root` requires `--preserve-folders`.
+
+For a ZIP entry `epaper-zip/space/planets/venus.png`:
+
+| Options | Carousel folder |
+| --- | --- |
+| No flags | `/` (unfiled) |
+| `--preserve-folders` | `epaper-zip/space/planets` |
+| `--preserve-folders --ignore-root` | `space/planets` |
+
+The ZIP's filename does not create a folder. Ignoring its root requires a single
+common enclosing folder across all imported images; loose images or multiple
+top-level folders cause an explicit error rather than dropping meaningful
+path segments. For directory imports, the selected directory's name is the
+root, not `/tmp` or its other ancestors. Images directly in the ignored root
+become unfiled.
+
+Imports follow path order, use the image filename stem as the slide title,
+and print each ID, title, and folder plus a final count. Each run creates new
+slides; it does not deduplicate previous imports. Non-image files and macOS
+archive metadata are skipped with log messages. Invalid images stop the import
+with an error identifying the file and number already imported; those earlier
+slides remain available. The batch is not one atomic transaction.
+
+ZIP images are unpacked one at a time into temporary storage, then copied into
+the existing persistent gallery. Temporary unpacked files are cleaned up, and
+the uploaded ZIP or source directory is left untouched. Unsafe paths,
+duplicate archive paths, links, special files, and encrypted image entries are
+rejected. A batch is limited to 10,000 entries, 64 MiB per image, and 1 GiB of
+total uncompressed image data. Use smaller batches on a Pi with limited free
+space; these limits do not reserve disk capacity.
+
 ## Select slides
 
 ```sh

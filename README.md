@@ -13,6 +13,7 @@ background without interrupting the carousel.
 - Displays portrait artwork on a 1200 x 1600 logical canvas.
 - Rotates slides every 30 minutes by default, with persistent pause and resume.
 - Supports manual selection and gallery management over SSH.
+- Bulk-imports ZIP files or directories, optionally preserving folder structure.
 - Offers an optional mouse- and keyboard-driven terminal dashboard (`epd dashboard`).
 - Groups slides into nested folders with folder-balanced, scoped playback.
 - Keeps slide images, metadata, and API source settings across reboots.
